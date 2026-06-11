@@ -151,6 +151,101 @@ function readLinkedContent(
   return results;
 }
 
+/** Recursively find all .md files in a directory, excluding _index.md. */
+function walkMarkdownFiles(dir: string): string[] {
+  const results: string[] = [];
+  try {
+    const items = fs.readdirSync(dir, { withFileTypes: true });
+    for (const item of items) {
+      const full = path.join(dir, item.name);
+      if (item.isDirectory()) {
+        results.push(...walkMarkdownFiles(full));
+      } else if (item.isFile() && item.name.endsWith(".md") && item.name !== "_index.md") {
+        results.push(full);
+      }
+    }
+  } catch { /* dir not found */ }
+  return results;
+}
+
+/**
+ * Refresh _index.md by scanning all .md files in the memory directory.
+ * Scans entries (## sections) from each file and builds a navigable TOC.
+ */
+function refreshIndex(cwd: string, scope: "project" | "global"): void {
+  const targetDir =
+    scope === "global" ? PATHS.personalDir : PATHS.memoriesDir(cwd);
+  if (!fs.existsSync(targetDir)) return;
+
+  const entries: {
+    relativePath: string;
+    section: string;
+    date?: string;
+    confidence?: string;
+  }[] = [];
+
+  const files = walkMarkdownFiles(targetDir);
+  for (const filePath of files) {
+    const relativePath = path.relative(targetDir, filePath).replace(/\\/g, "/");
+    const content = safeRead(filePath);
+    if (!content) continue;
+
+    const sections = content.split(/(?=^## )/m);
+    for (const section of sections) {
+      const titleMatch = section.match(/^## (.+)/m);
+      if (!titleMatch) continue;
+      const title = titleMatch[1].trim();
+
+      const dateMatch = section.match(/- Date: (\d{4}-\d{2}-\d{2})/);
+      const confidenceMatch = section.match(/\[(confirmed|inferred|intuition)\]/);
+
+      entries.push({
+        relativePath,
+        section: title,
+        date: dateMatch ? dateMatch[1] : undefined,
+        confidence: confidenceMatch ? confidenceMatch[1] : undefined,
+      });
+    }
+  }
+
+  // Group by directory (category)
+  const byCategory = new Map<string, typeof entries>();
+  for (const entry of entries) {
+    const dir = path.dirname(entry.relativePath);
+    const cat = dir === "." ? "uncategorized" : dir;
+    if (!byCategory.has(cat)) byCategory.set(cat, []);
+    byCategory.get(cat)!.push(entry);
+  }
+
+  let index = "# Memory Index\n\n";
+
+  // Sort: uncategorized first, then alphabetical
+  const sortedCats = Array.from(byCategory.keys()).sort((a, b) => {
+    if (a === "uncategorized") return -1;
+    if (b === "uncategorized") return 1;
+    return a.localeCompare(b);
+  });
+
+  for (const category of sortedCats) {
+    const items = byCategory.get(category)!;
+    const catLabel =
+      category === "uncategorized"
+        ? "Uncategorized"
+        : category.charAt(0).toUpperCase() + category.slice(1);
+    index += `## ${catLabel}\n\n`;
+    for (const item of items) {
+      const confidence = item.confidence ? ` | \`[${item.confidence}]\`` : "";
+      const date = item.date ? ` | ${item.date}` : "";
+      const fullLink = `memories/${item.relativePath}`;
+      index += `- [[${fullLink}#${item.section}|${item.section}]]${date}${confidence}\n`;
+    }
+    index += "\n";
+  }
+
+  const indexPath = path.join(targetDir, "_index.md");
+  fs.writeFileSync(indexPath, index.trim() + "\n", "utf-8");
+}
+
 /** Get a summary of the memory system state. */
 function getMemoryStatus(cwd: string): string {
   const projectDir = PATHS.projectDir(cwd);
@@ -165,15 +260,39 @@ function getMemoryStatus(cwd: string): string {
   summary += `- Session Notebook: ${notebookExists ? "✅" : "❌"}\n`;
 
   if (fs.existsSync(memoriesDir)) {
-    const files = fs
-      .readdirSync(memoriesDir)
-      .filter((f) => f.endsWith(".md"));
+    const files = walkMarkdownFiles(memoriesDir);
     summary += `- Long-term Memory Files: ${files.length}\n`;
-    for (const f of files) {
-      const filePath = path.join(memoriesDir, f);
+    // Group by subdirectory for tree-like display
+    const tree = new Map<string, number[]>();
+    for (const filePath of files) {
+      const relative = path.relative(memoriesDir, filePath).replace(/\\/g, "/");
+      const dir = path.dirname(relative);
+      if (!tree.has(dir)) tree.set(dir, []);
       const content = safeRead(filePath);
       const entries = content ? content.split("\n## ").length - 1 : 0;
-      summary += `  - ${f}: ${entries} entries\n`;
+      tree.get(dir)!.push(entries);
+    }
+    for (const [dir, entryCounts] of tree) {
+      if (dir === ".") {
+        // Flat files at root
+        for (const filePath of files) {
+          const relative = path.relative(memoriesDir, filePath).replace(/\\/g, "/");
+          if (path.dirname(relative) !== ".") continue;
+          const content = safeRead(filePath);
+          const entries = content ? content.split("\n## ").length - 1 : 0;
+          summary += `  - ${path.basename(filePath)}: ${entries} entries\n`;
+        }
+      } else {
+        const total = entryCounts.reduce((a, b) => a + b, 0);
+        summary += `  📁 ${dir}/ — ${entryCounts.length} files, ${total} entries\n`;
+        for (const filePath of files) {
+          const relative = path.relative(memoriesDir, filePath).replace(/\\/g, "/");
+          if (path.dirname(relative) !== dir) continue;
+          const content = safeRead(filePath);
+          const entries = content ? content.split("\n## ").length - 1 : 0;
+          summary += `    - ${path.basename(filePath)}: ${entries} entries\n`;
+        }
+      }
     }
   } else {
     summary += `- Long-term Memory Directory: ❌ Not found\n`;
@@ -200,6 +319,10 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     const cwd = ctx.cwd;
 
+    // 0. Refresh _index.md for both scopes
+    refreshIndex(cwd, "project");
+    refreshIndex(cwd, "global");
+
     // 1. Read core prompt
     const corePrompt = safeRead(PATHS.corePrompt);
     const coreSection =
@@ -210,31 +333,53 @@ export default function (pi: ExtensionAPI) {
     const notebookSection =
       notebookContent || "# Session Notebook\n（Not initialized）\n";
 
-    // 3. Resolve [[Wiki-links]] from notebook
+    // 3. Read _index.md (memory index)
+    const projIndex = safeRead(path.join(PATHS.memoriesDir(cwd), "_index.md"));
+    const globalIndex = safeRead(path.join(PATHS.personalDir, "_index.md"));
+    let indexSection = "";
+    if (projIndex || globalIndex) {
+      indexSection = "\n\n---\n\n## Memory Index\n\n";
+      if (projIndex) indexSection += `### Project Memory\n\n${projIndex.replace(/^# Memory Index\n*/, "")}\n\n`;
+      if (globalIndex) indexSection += `### Global Memory\n\n${globalIndex.replace(/^# Memory Index\n*/, "")}\n`;
+    }
+
+    // 4. Resolve [[Wiki-links]] from notebook
     const links = notebookContent ? extractLinks(notebookContent) : [];
     const userKeywords = event.prompt ? [event.prompt] : [];
     const linkedContent = readLinkedContent(links, cwd, userKeywords);
 
-    // 4. Assemble memory context
-    let memoryContext = `${coreSection}\n\n---\n\n${notebookSection}\n`;
+    // 5. Assemble memory context
+    let memoryContext = `${coreSection}\n\n---\n\n${notebookSection}${indexSection}\n`;
 
     if (linkedContent.length > 0) {
       memoryContext += "\n\n---\n\n## Related Memories\n";
       memoryContext += linkedContent.join("\n\n");
     }
 
-    // 5. Inject into system prompt
+    // 6. Inject into system prompt
     return {
       systemPrompt: event.systemPrompt + `\n\n${memoryContext}`,
     };
   });
 
   // ============================================================
-  // context: refine conversation context every LLM call
+  // context: refine conversation context
+  //
+  // ⚠️  DESIGN NOTES:
+  //   - Pi fires `context` event BEFORE EVERY LLM CALL, not just before
+  //     each user turn. A single user input can trigger 5+ LLM calls
+  //     if there are tool calls in sequence.
+  //   - The naive approach (count user messages, drop old ones) breaks
+  //     when the agent is stuck in a tool-call loop — context gets
+  //     trimmed mid-turn, discarding recent assistant/tool messages
+  //     that are essential for debugging the loop.
+  //   - Our strategy: use a token-based guard. Don't trim unless the
+  //     total message payload is genuinely large. And only trim at
+  //     the START of a user turn (not mid-turn during tool loops).
   // ============================================================
   pi.on("context", async (event, _ctx) => {
     const messages = event.messages;
-    if (!messages || messages.length <= 2) return;
+    if (!messages || messages.length <= 5) return;
 
     const userMsgIndices: number[] = [];
     const systemIndices: number[] = [];
@@ -245,6 +390,13 @@ export default function (pi: ExtensionAPI) {
       if (m.role === "system" || m.role === "developer") systemIndices.push(i);
     }
 
+    // Don't trim mid-turn: if the last message is NOT a user message,
+    // we're in the middle of a tool-calling loop. Trimming now would
+    // discard assistant/tool/error messages the LLM needs to see.
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg && lastMsg.role !== "user") return;
+
+    // Only trim if there are more than KEEP_RECENT_TURNS user messages.
     if (userMsgIndices.length <= KEEP_RECENT_TURNS) return;
 
     const keepFrom = userMsgIndices[userMsgIndices.length - KEEP_RECENT_TURNS];
@@ -265,12 +417,28 @@ export default function (pi: ExtensionAPI) {
 
   // ============================================================
   // Tool: remember — store info into long-term memory
+  //
+  // Scope rules (for LLM):
+  //   Use scope="global" when the information is useful across projects:
+  //   - Daisen's personal preferences and work habits
+  //   - Cross-project technical knowledge (how Pi works, TypeScript patterns)
+  //   - Development environment facts (Windows + WSL, tools)
+  //   - Reusable architecture lessons
+  //
+  //   Use scope="project" (default) when the info is project-specific:
+  //   - Project architecture decisions ("why X library")
+  //   - Project code facts
+  //   - Project events and milestones
+  //   - Project-specific conventions
+  //
+  //   Simple test: "Would this still be useful in a different project?"
+  //   Yes → global. No → project.
   // ============================================================
   pi.registerTool({
     name: "remember",
     label: "🧠 Remember",
     description:
-      "Store a piece of key information into long-term memory. Automatically sorted into facts / preferences / decisions / events.",
+      "Store a piece of key information into long-term memory. Automatically sorted into facts / preferences / decisions / events. Use scope=global for cross-project knowledge (preferences, technical knowledge, dev env). Use scope=project (default) for project-specific info.",
     parameters: {
       type: "object",
       properties: {
@@ -294,6 +462,26 @@ export default function (pi: ExtensionAPI) {
           type: "string",
           description: "Comma-separated tags, e.g. 'typescript, architecture'",
         },
+        confidence: {
+          type: "string",
+          enum: ["confirmed", "inferred", "intuition"],
+          description:
+            "Confidence level. confirmed=verified by evidence, inferred=logical deduction, intuition=gut feeling / preliminary. Default: no annotation.",
+        },
+        trigger: {
+          type: "string",
+          description:
+            "What triggered this memory. Prefix with type, e.g. 'conversation — Daisen suggested X', 'debugging — found root cause of Y', 'code-review — noticed pattern Z'. Common types: conversation, debugging, code-review, refactoring, experiment, reading, user-feedback, contradiction, external.",
+        },
+        file: {
+          type: "string",
+          description:
+            "Optional: target file name within the category directory, WITHOUT .md suffix. " +
+            "Examples: 'debugging' → events/debugging.md, 'architecture' → decisions/architecture.md. " +
+            "Check the Memory Index ([[_index.md]]) for existing categories. " +
+            "If content doesn't fit any existing category, propose a new file name and ASK THE USER FOR CONFIRMATION before using it. " +
+            "If omitted, falls back to a single general file (e.g., events.md).",
+        },
         related: {
           type: "string",
           description: "Related [[Wiki-links]], comma separated",
@@ -310,16 +498,28 @@ export default function (pi: ExtensionAPI) {
         : [];
       const related = params.related || "";
 
-      const fileName = `${category}s.md`;
       const targetDir =
         scope === "global" ? PATHS.personalDir : PATHS.memoriesDir(cwd);
 
-      const targetFile = path.join(targetDir, fileName);
-      fs.mkdirSync(targetDir, { recursive: true });
+      // Determine target file: if `file` param is provided, write to subdirectory
+      const fileParam = params.file as string | undefined;
+      let fileName: string;
+      let targetFile: string;
+      if (fileParam) {
+        const categoryDir = `${category}s`;
+        fileName = `${categoryDir}/${fileParam}.md`;
+        targetFile = path.join(targetDir, categoryDir, `${fileParam}.md`);
+      } else {
+        fileName = `${category}s.md`;
+        targetFile = path.join(targetDir, fileName);
+      }
+      fs.mkdirSync(path.dirname(targetFile), { recursive: true });
 
       const timestamp = new Date().toISOString().slice(0, 10);
       const tagLine = tags.length > 0 ? `tags: [${tags.join(", ")}]` : "";
       const relatedLine = related ? `\nRelated: ${related}` : "";
+      const confidence = params.confidence as string | undefined;
+      const trigger = params.trigger as string | undefined;
 
       const existing = safeRead(targetFile);
       let entryTitle: string;
@@ -333,10 +533,16 @@ export default function (pi: ExtensionAPI) {
             : contentFirstLine;
       }
 
+      const metaLines: string[] = [];
+      if (confidence) metaLines.push(`- **置信度**: \`[${confidence}]\``);
+      if (trigger) metaLines.push(`- **触发器**: ${trigger}`);
+      if (tagLine) metaLines.push(`- ${tagLine}`);
+      metaLines.push(`- Date: ${timestamp}`);
+      const metaBlock = metaLines.join("\n");
+
       const entry = `
 ## ${entryTitle}
-${tagLine ? `- ${tagLine}` : ""}
-- Date: ${timestamp}
+${metaBlock}
 
 ${params.content}${relatedLine}
 `;
@@ -356,6 +562,9 @@ ${params.content}${relatedLine}
           fs.writeFileSync(notebookPath, updated, "utf-8");
         }
       }
+
+      // Refresh index to include the new entry
+      refreshIndex(cwd, scope as "project" | "global");
 
       return {
         content: [
@@ -393,6 +602,12 @@ ${params.content}${relatedLine}
           description:
             "Search scope. project=current project only, global=personal only, all=everywhere",
         },
+        confidence: {
+          type: "string",
+          enum: ["confirmed", "inferred", "intuition"],
+          description:
+            "Only return entries with this confidence level (optional filter).",
+        },
         maxResults: {
           type: "number",
           description: "Maximum results to return (default: 5)",
@@ -405,6 +620,7 @@ ${params.content}${relatedLine}
       const query = (params.query as string).toLowerCase();
       const scope = (params.scope as string) || "all";
       const maxResults = (params.maxResults as number) || 5;
+      const confidenceFilter = params.confidence as string | undefined;
 
       const keywords = query.split(/\s+/).filter(Boolean);
       const results: string[] = [];
@@ -419,9 +635,9 @@ ${params.content}${relatedLine}
       }
 
       for (const dir of searchDirs) {
-        const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md"));
-        for (const file of files) {
-          const filePath = path.join(dir, file);
+        const filePaths = walkMarkdownFiles(dir);
+        for (const filePath of filePaths) {
+          const file = path.relative(dir, filePath).replace(/\\/g, "/");
           const content = safeRead(filePath);
           if (!content) continue;
 
@@ -451,7 +667,13 @@ ${params.content}${relatedLine}
               sectionLines.push(line);
               const lower = line.toLowerCase();
               if (keywords.length === 0 || keywords.some((k) => lower.includes(k))) {
-                matchCount++;
+                // Apply confidence filter if set
+                const matchesConfidence =
+                  !confidenceFilter ||
+                  lower.includes(`[${confidenceFilter}]`);
+                if (matchesConfidence) {
+                  matchCount++;
+                }
               }
             }
           }
@@ -505,12 +727,16 @@ ${params.content}${relatedLine}
 
   // ============================================================
   // Tool: forget — delete a memory entry
+  //   ⚠️ PREFER `supersede` OVER `forget`.
+  //     forget destroys information permanently.
+  //     supersede keeps old entry and marks it as superseded by a new one.
+  //     Only use forget for: test data, duplicate entries, obvious noise.
   // ============================================================
   pi.registerTool({
     name: "forget",
     label: "🗑️ Forget",
     description:
-      "Delete a memory entry. Provide the target filename and section title.",
+      "Delete a memory entry permanently. ⚠️ Prefer `supersede` instead — it keeps the old entry for traceability and just marks it as superseded.",
     parameters: {
       type: "object",
       properties: {
@@ -573,10 +799,111 @@ ${params.content}${relatedLine}
         content: [
           {
             type: "text",
-            text: `🗑️ Deleted "${section}" from [[${file}]].`,
+            text: `🗑️ Permanently deleted "${section}" from [[${file}]].`,
           },
         ],
         details: { file, section },
+      };
+    },
+  });
+
+  // ============================================================
+  // Tool: supersede — mark an entry as superseded by new understanding
+  //   Append-only: never delete the old entry, just annotate it.
+  //   Semantic corrections (wrong reasoning, overturned conclusions) MUST
+  //   use this tool. Non-semantic fixes (typos, broken links, formatting)
+  //   can use edit directly.
+  // ============================================================
+  pi.registerTool({
+    name: "supersede",
+    label: "🔄 Supersede",
+    description:
+      "Mark an existing memory entry as superseded by new understanding. Appends a superseded-by annotation to the old entry without deleting it. Returns the old content so you can create the replacement entry separately (via `remember` or `edit`).",
+    parameters: {
+      type: "object",
+      properties: {
+        file: {
+          type: "string",
+          description:
+            "Target filename, e.g. decisions.md, events.md",
+        },
+        section: {
+          type: "string",
+          description:
+            "Section title of the entry to supersede (after ##)",
+        },
+        reason: {
+          type: "string",
+          description:
+            "Why this entry is being superseded. Be specific: what was wrong or incomplete.",
+        },
+        newReference: {
+          type: "string",
+          description:
+            "Wiki-link to the new entry that supersedes this one, e.g. [[decisions.md#New Decision Title]]",
+        },
+        scope: {
+          type: "string",
+          enum: ["project", "global"],
+          description: "Scope of the memory",
+        },
+      },
+      required: ["file", "section", "reason"],
+    },
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const cwd = ctx.cwd;
+      const file = params.file as string;
+      const section = params.section as string;
+      const reason = params.reason as string;
+      const newReference = params.newReference as string | undefined;
+      const scope = (params.scope as string) || "project";
+
+      const targetDir =
+        scope === "global" ? PATHS.personalDir : PATHS.memoriesDir(cwd);
+      const targetFile = path.join(targetDir, file);
+      const content = safeRead(targetFile);
+
+      if (!content) {
+        return {
+          content: [{ type: "text", text: `❌ File [[${file}]] not found.` }],
+          details: {},
+        };
+      }
+
+      const timestamp = new Date().toISOString().slice(0, 10);
+      const supersedeLine = newReference
+        ? `\n\n↗ **Superseded by** ${newReference} (${timestamp}) — ${reason}`
+        : `\n\n↗ **Superseded** (${timestamp}) — ${reason}`;
+
+      // Find the section in the file
+      const sectionRegex = new RegExp(
+        `(^## ${section.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*?)(?=\\n## |\\z)`,
+        "m",
+      );
+
+      if (!sectionRegex.test(content)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `❌ Section "${section}" not found in [[${file}]].`,
+            },
+          ],
+          details: {},
+        };
+      }
+
+      const updated = content.replace(sectionRegex, `$1${supersedeLine}`);
+      fs.writeFileSync(targetFile, updated, "utf-8");
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `🔄 Marked "${section}" in [[${file}]] as superseded${newReference ? ` by ${newReference}` : ""}.\n\nOld entry content:\n${content.match(sectionRegex)?.[0]?.trim() || "(could not extract)"}\n\n---\n\nNow create the replacement entry using \`remember\` or \`edit\`.`,
+          },
+        ],
+        details: { file, section, superseded: true },
       };
     },
   });

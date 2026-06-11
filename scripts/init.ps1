@@ -39,6 +39,9 @@ Write-Host "[1/4] Creating project memory structure..." -ForegroundColor Yellow
 $projectMemoryDir = Join-Path $ProjectDir ".pi" "memory"
 $projectMemoriesDir = Join-Path $projectMemoryDir "memories"
 New-Item -ItemType Directory -Path $projectMemoriesDir -Force | Out-Null
+# Create chunked subdirectories
+New-Item -ItemType Directory -Path (Join-Path $projectMemoriesDir "events") -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $projectMemoriesDir "decisions") -Force | Out-Null
 Write-Host "  ✅ $projectMemoryDir" -ForegroundColor Green
 
 # ---- Step 2: Copy template files to project ----
@@ -85,6 +88,9 @@ Write-Host "[4/4] Setting up global core-prompt..." -ForegroundColor Yellow
 $globalMemoryDir = Join-Path $HomeDir ".pi" "agent" "memory"
 $globalPersonalDir = Join-Path $globalMemoryDir "personal"
 New-Item -ItemType Directory -Path $globalPersonalDir -Force | Out-Null
+# Create chunked subdirectories for global memory
+New-Item -ItemType Directory -Path (Join-Path $globalPersonalDir "events") -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $globalPersonalDir "decisions") -Force | Out-Null
 
 $corePromptDst = Join-Path $globalMemoryDir "core-prompt.md"
 if (-not (Test-Path $corePromptDst)) {

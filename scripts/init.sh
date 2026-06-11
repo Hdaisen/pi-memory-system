@@ -31,6 +31,8 @@ echo ""
 # ---- Step 1: Create project-level directories ----
 echo "[1/4] Creating project memory structure..."
 mkdir -p "$PROJECT_DIR/.pi/memory/memories"
+mkdir -p "$PROJECT_DIR/.pi/memory/memories/events"
+mkdir -p "$PROJECT_DIR/.pi/memory/memories/decisions"
 echo "  ✅ $PROJECT_DIR/.pi/memory/"
 
 # ---- Step 2: Copy template files to project ----
@@ -70,6 +72,8 @@ echo "[4/4] Setting up global core-prompt..."
 global_memory_dir="$HOME_DIR/.pi/agent/memory"
 global_personal_dir="$HOME_DIR/.pi/agent/memory/personal"
 mkdir -p "$global_personal_dir"
+mkdir -p "$global_personal_dir/events"
+mkdir -p "$global_personal_dir/decisions"
 
 core_prompt_dst="$global_memory_dir/core-prompt.md"
 if [ ! -f "$core_prompt_dst" ]; then
