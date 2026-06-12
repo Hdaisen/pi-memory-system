@@ -62,6 +62,21 @@ function getProjectName(cwd: string): string {
   return path.basename(cwd);
 }
 
+/**
+ * Set or correct the project name. Writes a .pi-project marker so
+ * the name persists across sessions. The marker is found by the
+ * walk-up detection in getProjectName() — writing to any directory
+ * above the marker-less zone is sufficient.
+ */
+function setProjectName(cwd: string, name: string): void {
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  // Write marker to cwd (walk-up starts from cwd, so nearest wins)
+  fs.writeFileSync(path.join(cwd, ".pi-project"), trimmed, "utf-8");
+  // Clear cache so next getProjectName re-computes with new state
+  _projNameCache = null;
+}
+
 const PATHS = {
   // Global (agent-level)
   corePrompt: path.join(HOME, ".pi", "agent", "memory", "core-prompt.md"),
@@ -1519,6 +1534,49 @@ Or install it: pip install markitdown (in WSL venv at ~/.markitdown-venv/)`,
             : "❌ User declined.",
         }],
         details: { confirmed },
+      };
+    },
+  });
+
+  // ============================================================
+  // Tool: set_project — set or correct the project name
+  // ============================================================
+  pi.registerTool({
+    name: "set_project",
+    label: "📁 Set Project",
+    description:
+      "Set or correct the current project name. Use this when the system " +
+      "detected the wrong project (e.g. from a subdirectory) and you know " +
+      "which project you're working on. The name is persisted in a .pi-project " +
+      "marker file and used for all subsequent memory operations.",
+    promptSnippet:
+      "Set the current project name (e.g. set_project name=jason)",
+    promptGuidelines: [
+      "If the system guessed the wrong project name, call set_project to correct it.",
+      "The project name determines where notebook.md and project memories are stored.",
+      "Example: you're in a subdirectory of 'jason' but system reads 'frontend' → call set_project name=jason",
+    ],
+    parameters: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description:
+            "The correct project name. Should be short and match the project " +
+            "directory name, e.g. 'jason', 'pi-memory-system'.",
+        },
+      },
+      required: ["name"],
+    },
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const name = params.name as string;
+      const cwd = ctx.cwd;
+
+      setProjectName(cwd, name);
+
+      return {
+        content: [{ type: "text", text: `✅ Project name set to "${name}". Notebook and memories will now resolve under projects/${name}/.` }],
+        details: { projectName: name },
       };
     },
   });
