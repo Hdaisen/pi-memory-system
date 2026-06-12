@@ -82,6 +82,6 @@ remember "Adopt pnpm as package manager" category=decision file=tools
 
 ### 作用域 / Scope
 
-- `project`（默认）— `.pi/memory/memories/decisions/`，项目特有的架构决策、代码事实
+- `project`（默认）— `~/.pi/agent/memory/projects/<name>/memories/decisions/`，项目特有的架构决策、代码事实
 - `global` — `~/.pi/agent/memory/personal/decisions/`，跨项目通用的技术知识/方法论
 - **双重记录**：一条信息可以同时写两个作用域（项目细节存 project，通用经验存 global）

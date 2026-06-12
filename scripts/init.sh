@@ -28,17 +28,19 @@ echo "🧠 Pi Memory System — Initializer"
 echo "================================="
 echo ""
 
-# ---- Step 1: Create project-level directories ----
-echo "[1/4] Creating project memory structure..."
-mkdir -p "$PROJECT_DIR/.pi/memory/memories"
-mkdir -p "$PROJECT_DIR/.pi/memory/memories/events"
-mkdir -p "$PROJECT_DIR/.pi/memory/memories/decisions"
-echo "  ✅ $PROJECT_DIR/.pi/memory/"
+PROJECT_NAME="$(basename "$PROJECT_DIR")"
 
-# ---- Step 2: Copy template files to project ----
+# ---- Step 1: Create centralized project memory directories ----
+echo "[1/4] Creating project memory structure..."
+PROJ_MEM_DIR="$HOME_DIR/.pi/agent/memory/projects/$PROJECT_NAME"
+mkdir -p "$PROJ_MEM_DIR/memories/events"
+mkdir -p "$PROJ_MEM_DIR/memories/decisions"
+echo "  ✅ $PROJ_MEM_DIR/"
+
+# ---- Step 2: Copy template files to centralized location ----
 echo "[2/4] Copying template files..."
 for file in facts.md preferences.md decisions.md events.md; do
-    dst="$PROJECT_DIR/.pi/memory/memories/$file"
+    dst="$PROJ_MEM_DIR/memories/$file"
     if [ ! -f "$dst" ]; then
         cp "$SCRIPT_DIR/templates/memories/$file" "$dst"
         echo "  ✅ Created $dst"
@@ -48,7 +50,7 @@ for file in facts.md preferences.md decisions.md events.md; do
 done
 
 # Copy notebook template
-notebook_dst="$PROJECT_DIR/.pi/memory/notebook.md"
+notebook_dst="$PROJ_MEM_DIR/notebook.md"
 if [ ! -f "$notebook_dst" ]; then
     cp "$SCRIPT_DIR/templates/notebook.md" "$notebook_dst"
     echo "  ✅ Created $notebook_dst"

@@ -34,24 +34,23 @@ Write-Host "🧠 Pi Memory System — Initializer" -ForegroundColor Cyan
 Write-Host "=================================" -ForegroundColor Cyan
 Write-Host ""
 
-# ---- Step 1: Create project-level directories ----
+# ---- Step 1: Create centralized project memory directories ----
 Write-Host "[1/4] Creating project memory structure..." -ForegroundColor Yellow
-$projectMemoryDir = Join-Path $ProjectDir ".pi" "memory"
-$projectMemoriesDir = Join-Path $projectMemoryDir "memories"
-New-Item -ItemType Directory -Path $projectMemoriesDir -Force | Out-Null
-# Create chunked subdirectories
-New-Item -ItemType Directory -Path (Join-Path $projectMemoriesDir "events") -Force | Out-Null
-New-Item -ItemType Directory -Path (Join-Path $projectMemoriesDir "decisions") -Force | Out-Null
-Write-Host "  ✅ $projectMemoryDir" -ForegroundColor Green
+$projectName = Split-Path $ProjectDir -Leaf
+$projMemDir = Join-Path $HomeDir ".pi" "agent" "memory" "projects" $projectName
+$projMemoriesDir = Join-Path $projMemDir "memories"
+New-Item -ItemType Directory -Path (Join-Path $projMemoriesDir "events") -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $projMemoriesDir "decisions") -Force | Out-Null
+Write-Host "  ✅ $projMemDir" -ForegroundColor Green
 
-# ---- Step 2: Copy template files to project ----
+# ---- Step 2: Copy template files to centralized location ----
 Write-Host "[2/4] Copying template files..." -ForegroundColor Yellow
 $templateDir = Join-Path $ScriptRoot "templates" "memories"
 
 $templateFiles = @("facts.md", "preferences.md", "decisions.md", "events.md")
 foreach ($file in $templateFiles) {
     $src = Join-Path $templateDir $file
-    $dst = Join-Path $projectMemoriesDir $file
+    $dst = Join-Path $projMemoriesDir $file
     if (-not (Test-Path $dst)) {
         Copy-Item $src $dst
         Write-Host "  ✅ Created $dst" -ForegroundColor Green
@@ -61,7 +60,7 @@ foreach ($file in $templateFiles) {
 }
 
 # Copy notebook template
-$notebookDst = Join-Path $projectMemoryDir "notebook.md"
+$notebookDst = Join-Path $projMemDir "notebook.md"
 if (-not (Test-Path $notebookDst)) {
     Copy-Item (Join-Path $ScriptRoot "templates" "notebook.md") $notebookDst
     Write-Host "  ✅ Created $notebookDst" -ForegroundColor Green

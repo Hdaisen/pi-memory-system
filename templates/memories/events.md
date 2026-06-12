@@ -87,6 +87,6 @@ remember "Architecture discussion about Y" category=event file=design
 
 ### 作用域 / Scope
 
-- `project`（默认）— `.pi/memory/memories/events/`，项目特有事件
+- `project`（默认）— `~/.pi/agent/memory/projects/<name>/memories/events/`，项目特有事件
 - `global` — `~/.pi/agent/memory/personal/events/`，跨项目通用的经验/教训
 - **双重记录**：项目特有的调试经历可能提炼出通用技术经验——项目细节存 project，通用的教训存 global
