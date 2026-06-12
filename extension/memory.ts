@@ -1371,4 +1371,54 @@ Or install it: pip install markitdown (in WSL venv at ~/.markitdown-venv/)`,
       };
     },
   });
+
+  // ============================================================
+  // Tool: confirm — interactive user confirmation
+  // ============================================================
+  pi.registerTool({
+    name: "confirm",
+    label: "✅ Confirm",
+    description:
+      "Show an interactive yes/no prompt to the user in the terminal. " +
+      "Use this when you need user confirmation before proceeding. " +
+      "The user can press y/Enter for yes, n/Enter for no.",
+    promptSnippet:
+      "Ask the user for interactive confirmation",
+    promptGuidelines: [
+      "Use confirm when you need user confirmation before proceeding with an action.",
+      "This shows an interactive prompt in the terminal — the user just presses y/n + Enter.",
+      "Do NOT use this for open-ended questions; yes/no confirmations only.",
+      "Call confirm FIRST, then act based on the result.",
+    ],
+    parameters: {
+      type: "object",
+      properties: {
+        title: {
+          type: "string",
+          description: "Short title for the confirmation dialog.",
+        },
+        message: {
+          type: "string",
+          description: "Detailed message explaining what the user is confirming.",
+        },
+      },
+      required: ["title", "message"],
+    },
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const title = params.title as string;
+      const message = params.message as string;
+
+      const confirmed = await ctx.ui.confirm(title, message);
+
+      return {
+        content: [{
+          type: "text",
+          text: confirmed
+            ? "✅ User confirmed."
+            : "❌ User declined.",
+        }],
+        details: { confirmed },
+      };
+    },
+  });
 }
