@@ -61,12 +61,13 @@ function getRefineStatus(): string {
   if (_userMessageCount <= KEEP_RECENT_TURNS) {
     const remaining = KEEP_RECENT_TURNS - _userMessageCount + 1;
     let s = `🧠 Trim: ${_userMessageCount}/${KEEP_RECENT_TURNS}`;
-    if (remaining > 0) s += ` (${remaining} more msg${remaining > 1 ? "s" : ""})`;
-    if (remaining <= 1) s += " — /rec to skip";
+    if (remaining > 2) s += ` /trim:force`;
+    else if (remaining === 2) s += ` /rec|/trim`;
+    else if (remaining === 1) s += ` /rec:skip`;
     return s;
   }
 
-  return `🧠 Trim: next msg → clean (/${KEEP_RECENT_TURNS} kept, /rec to skip)`;
+  return `🧠 Trim: ✅ cleaned (/trim to force)`;
 }
 
 // ============================================================
@@ -632,7 +633,7 @@ export default function (pi: ExtensionAPI) {
 
     // Reset counter post-cleanup (only KEEP_RECENT_TURNS user turns remain)
     _userMessageCount = KEEP_RECENT_TURNS;
-    ctx.ui.setStatus("refine", `🧠 Trim: ✅ cleaned (kept ${KEEP_RECENT_TURNS} user turns, /rec to skip next)`);
+    ctx.ui.setStatus("refine", `🧠 Trim: ✅ cleaned (/trim to force)`);
     return { messages: filtered };
   });
 
