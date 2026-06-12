@@ -27,8 +27,38 @@ import { compressContent, ccrStore, getCcrStats } from "./compress";
 
 const HOME = process.env.HOME || process.env.USERPROFILE || "~";
 
-/** Extract project name from working directory path. */
+/**
+ * Detect project name by walking up from cwd looking for a marker.
+ * Priority: .pi-project file > .git directory > cwd basename
+ * Result is cached to avoid repeated filesystem lookups.
+ */
+let _projNameCache: { cwd: string; name: string } | null = null;
 function getProjectName(cwd: string): string {
+  if (_projNameCache && _projNameCache.cwd === cwd) return _projNameCache.name;
+
+  let dir = path.resolve(cwd);
+  while (true) {
+    // Marker file with explicit project name
+    const marker = path.join(dir, ".pi-project");
+    if (fs.existsSync(marker)) {
+      const name = fs.readFileSync(marker, "utf-8").trim();
+      if (name) {
+        _projNameCache = { cwd, name };
+        return name;
+      }
+    }
+    // Git repo → use parent dir name
+    if (fs.existsSync(path.join(dir, ".git"))) {
+      _projNameCache = { cwd, name: path.basename(dir) };
+      return path.basename(dir);
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break; // hit filesystem root
+    dir = parent;
+  }
+
+  // Fallback: use cwd basename
+  _projNameCache = { cwd, name: path.basename(cwd) };
   return path.basename(cwd);
 }
 
