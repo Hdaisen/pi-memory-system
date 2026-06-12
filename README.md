@@ -36,8 +36,8 @@
 | Layer | File | Purpose |
 |:------|:-----|:---------|
 | 🏛️ **Core Prompt** | `~/.pi/agent/memory/core-prompt.md` | Identity, principles, behavior framework |
-| 📓 **Session Notebook** | `.pi/memory/notebook.md` (per project) | Current tasks, progress, active context |
-| 🗄️ **Long-term Memory** | `.pi/memory/memories/` (project)<br>`~/.pi/agent/memory/personal/` (global) | Facts, preferences, decisions, events |
+| 📓 **Session Notebook** | `~/.pi/agent/memory/projects/<name>/notebook.md` (per project) | Current tasks, progress, active context |
+| 🗄️ **Long-term Memory** | `~/.pi/agent/memory/projects/<name>/memories/` (project)<br>`~/.pi/agent/memory/personal/` (global) | Facts, preferences, decisions, events |
 
 ## Workflow
 
@@ -130,7 +130,7 @@ cp extension/compress.ts ~/.pi/agent/extensions/compress.ts
 
 **3. Project initialization**
 ```
-your-project/.pi/memory/
+your-project/~/.pi/agent/memory/projects/<name>/
 ├── notebook.md             # Copy templates/notebook.md
 └── memories/
     ├── _index.md
@@ -221,7 +221,7 @@ memories/
 
 | Scope | Location | Judgement |
 |:------|:---------|:----------|
-| `project` | `.pi/memory/memories/` | Only useful in this project |
+| `project` | `~/.pi/agent/memory/projects/<name>/memories/` | Only useful in this project |
 | `global` | `~/.pi/agent/memory/personal/` | Still useful in other projects |
 
 One piece of information can be stored in both scopes simultaneously.

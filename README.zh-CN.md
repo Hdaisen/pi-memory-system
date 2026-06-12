@@ -36,8 +36,8 @@
 | 层级 | 文件 | 作用 |
 |:-----|:-----|:------|
 | 🏛️ **核心提示词** | `~/.pi/agent/memory/core-prompt.md` | 身份、原则、行为框架 |
-| 📓 **会话小本本** | `.pi/memory/notebook.md`（每项目） | 当前任务、进度、活跃上下文 |
-| 🗄️ **长期记忆** | `.pi/memory/memories/`（项目）<br>`~/.pi/agent/memory/personal/`（全局） | 事实、偏好、决策、事件 |
+| 📓 **会话小本本** | `~/.pi/agent/memory/projects/<name>/notebook.md`（每项目） | 当前任务、进度、活跃上下文 |
+| 🗄️ **长期记忆** | `~/.pi/agent/memory/projects/<name>/memories/`（项目）<br>`~/.pi/agent/memory/personal/`（全局） | 事实、偏好、决策、事件 |
 
 ## 工作流程
 
@@ -130,7 +130,7 @@ cp extension/compress.ts ~/.pi/agent/extensions/compress.ts
 
 **3. 项目初始化**
 ```
-your-project/.pi/memory/
+your-project/~/.pi/agent/memory/projects/<name>/
 ├── notebook.md             # 复制 templates/notebook.md
 └── memories/
     ├── _index.md
@@ -221,7 +221,7 @@ memories/
 
 | 作用域 | 存储位置 | 判断标准 |
 |:-------|:----------|:----------|
-| `project` | `.pi/memory/memories/` | 仅本项目有用 |
+| `project` | `~/.pi/agent/memory/projects/<name>/memories/` | 仅本项目有用 |
 | `global` | `~/.pi/agent/memory/personal/` | 换项目还有用 |
 
 一条信息可以同时写两个作用域。

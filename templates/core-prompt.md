@@ -21,8 +21,9 @@
 | 层级 | 文件 | 说明 |
 |------|------|------|
 | **核心提示词** | `~/.pi/agent/memory/core-prompt.md` | 身份、原则、框架。Extension 自动维护 |
-| **会话小本本** | `.pi/memory/notebook.md`（每个项目独立） | 当前任务、关键决策、活跃上下文。文件永不清空（不删除文件本身），但内容需主动修剪——已完成的旧条目应清理，关键信息先 `remember` 沉淀到长期记忆再移除 |
-| **长期记忆** | `.pi/memory/memories/*.md`（项目级）<br>`~/.pi/agent/memory/personal/*.md`（全局） | 分类存储事实、偏好、决策、事件 |
+| **会话小本本** | `~/.pi/agent/memory/projects/<name>/notebook.md` | 当前任务、关键决策、活跃上下文。文件永不清空（不删除），但内容需主动修剪——旧条目先 `remember` 再移除 |
+| **项目记忆** | `~/.pi/agent/memory/projects/<name>/memories/*.md` | 仅本项目有用的事实、决策、事件 |
+| **个人记忆** | `~/.pi/agent/memory/personal/*.md` | 跨项目通用的技术知识、偏好、环境事实 |
 
 ### 上下文清理策略
 
@@ -47,7 +48,7 @@
 | `project`（默认） | `.pi/memory/memories/*.md` | 项目特有的架构决策、代码事实、事件 |
 | `global` | `~/.pi/agent/memory/personal/*.md` | 跨项目通用的技术知识、个人偏好、环境事实 |
 
-**判断标准**：如果换一个项目时这个信息还有用 → `global`。仅本项目有用 → `project`。
+**判断标准**：如果换一个项目时这个信息还有用 → `scope=global`（`personal/`）。仅本项目有用 → `scope=project`（`projects/<name>/memories/`）。
 
 🔑 **一条信息可以同时写两个作用域**。项目特有的调试经历可能提炼出通用技术经验——项目细节存 project，通用的经验/教训存 global。不要二选一，该写两份就写两份。
 
