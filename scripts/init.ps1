@@ -75,10 +75,12 @@ if (-not $SkipExtension) {
     $extDir = Join-Path $HomeDir ".pi" "agent" "extensions"
     New-Item -ItemType Directory -Path $extDir -Force | Out-Null
 
-    $extSrc = Join-Path $ScriptRoot "extension" "memory.ts"
-    $extDst = Join-Path $extDir "memory.ts"
-    Copy-Item $extSrc $extDst -Force
-    Write-Host "  ✅ Installed extension to $extDst" -ForegroundColor Green
+    @("memory.ts", "compress.ts") | ForEach-Object {
+      $src = Join-Path $ScriptRoot "extension" "$_"
+      $dst = Join-Path $extDir "$_"
+      Copy-Item $src $dst -Force
+    }
+    Write-Host "  ✅ Installed extension to ${extDir}{memory.ts,compress.ts}" -ForegroundColor Green
 } else {
     Write-Host "[3/4] Skipping extension installation (--SkipExtension)" -ForegroundColor Gray
 }

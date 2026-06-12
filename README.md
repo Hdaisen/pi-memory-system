@@ -280,6 +280,8 @@ pi-memory-system/
 | `🗑️ forget` | ⚠️ Delete. Prefer supersede |
 | `📓 notebook` | View/update the session notebook |
 | `📊 memory_status` | View memory file status overview |
+| `📄 convert_file` | Convert binary files (PDF/DOCX/etc.) to Markdown (requires WSL + MarkItDown) |
+| `📦 ccr_retrieve` | Recover original content after auto-compression |
 
 ## Quick Start
 
@@ -287,6 +289,9 @@ pi-memory-system/
 git clone https://github.com/Hdaisen/pi-memory-system.git
 # Run the init script from your project directory:
 bash /path/to/pi-memory-system/scripts/init.sh
+# Or manually:
+# cp extension/memory.ts ~/.pi/agent/extensions/memory.ts
+# cp extension/compress.ts ~/.pi/agent/extensions/compress.ts
 ```
 Then customize `~/.pi/agent/memory/core-prompt.md` and restart Pi.
 
@@ -317,7 +322,9 @@ Key distinctions we made:
 
 ```
 pi-memory-system/
-├── extension/memory.ts      # Core Pi extension
+├── extension/
+│   ├── memory.ts            # Core Pi extension
+│   └── compress.ts          # Content compression module (imported by memory.ts)
 ├── templates/               # Core prompt & memory templates
 ├── example/                 # Example project
 ├── scripts/                 # Setup scripts

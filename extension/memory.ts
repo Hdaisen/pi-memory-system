@@ -12,12 +12,14 @@
  * - Context refinement: prevents infinite context growth
  * - 5 built-in tools: remember / recall / forget / notebook / memory_status
  *
- * @see https://github.com/your-username/pi-memory-system
+ * @see https://github.com/Hdaisen/pi-memory-system
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { execSync } from "node:child_process";
+import { compressContent, ccrStore, getCcrStats } from "./compress";
 
 // ============================================================
 // Config — 🛠️ Customize these paths for your setup
@@ -90,6 +92,134 @@ function resolveLink(link: string, cwd: string): string | null {
   if (fs.existsSync(personal)) return personal;
 
   return null;
+}
+
+// ============================================================
+// Content fingerprint helpers — detect similarity for diversity sorting
+// ============================================================
+
+/**
+ * Extract a content fingerprint from text: keywords + their frequency.  */
+function contentFingerprint(text: string): Map<string, number> {
+  const stopWords = new Set([
+    "the", "a", "an", "is", "was", "are", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "can", "shall", "to", "of", "in", "for",
+    "on", "with", "at", "by", "from", "as", "into", "through", "during",
+    "before", "after", "above", "below", "between", "out", "off", "over",
+    "under", "again", "further", "then", "once", "this", "that", "these",
+    "those", "not", "no", "nor", "but", "or", "and", "if", "while",
+    "because", "until", "so", "about", "up", "it", "its", "just", "also",
+    "very", "too", "here", "there", "all", "each", "every", "both",
+    "few", "more", "most", "other", "some", "such", "only", "own",
+    "same", "than", "too", "very", "well", "back", "still", "yet",
+    "one", "two", "new", "like", "use", "way", "get", "make", "know",
+    "take", "see", "come", "think", "look", "want", "give", "tell",
+    "work", "call", "try", "ask", "need", "feel", "become", "leave",
+    "put", "mean", "keep", "let", "begin", "seem", "help", "turn",
+  ]);
+  const fp = new Map<string, number>();
+  const words = text.toLowerCase().split(/[^a-zA-Z0-9\u4e00-\u9fff]+/g);
+  for (const w of words) {
+    if (w.length > 2 && !stopWords.has(w)) {
+      fp.set(w, (fp.get(w) || 0) + 1);
+    }
+  }
+  return fp;
+}
+
+/**
+ * Compute Jaccard similarity between two content fingerprints.
+ * Uses weighted intersection to handle frequency differences.
+ */
+function fingerprintSimilarity(
+  a: Map<string, number>,
+  b: Map<string, number>,
+): number {
+  const allKeys = new Set([...a.keys(), ...b.keys()]);
+  if (allKeys.size === 0) return 1;
+
+  let intersection = 0;
+  let union = 0;
+  for (const key of allKeys) {
+    const va = a.get(key) || 0;
+    const vb = b.get(key) || 0;
+    intersection += Math.min(va, vb);
+    union += Math.max(va, vb);
+  }
+  return intersection / union;
+}
+
+/**
+ * Compute similarity between two items. Used by diversitySort.
+ */
+function itemSimilarity<T>(a: T, b: T, extractor: (item: T) => string): number {
+  return fingerprintSimilarity(contentFingerprint(extractor(a)), contentFingerprint(extractor(b)));
+}
+
+/**
+ * Diversity sort: reorder items so the most unique ones come first.
+ * Greedy algorithm — pick the item most different from all already-selected.
+ * Keeps ALL items, just changes order. Designed for recall results
+ * where the LLM can only see the first few but shouldn't miss variety.
+ */
+function diversitySort<T>(
+  items: T[],
+  extractor: (item: T) => string,
+): T[] {
+  if (items.length <= 1) return items;
+
+  const fingerprints = items.map((item) => contentFingerprint(extractor(item)));
+  const selected = new Set<number>();
+  const result: T[] = [];
+
+  // Pick the first one: most unique (lowest average similarity to all others)
+  let firstIdx = 0;
+  let bestScore = Infinity;
+  for (let i = 0; i < items.length; i++) {
+    let avgSim = 0;
+    for (let j = 0; j < items.length; j++) {
+      if (i !== j) avgSim += fingerprintSimilarity(fingerprints[i], fingerprints[j]);
+    }
+    avgSim /= items.length - 1;
+    if (avgSim < bestScore) {
+      bestScore = avgSim;
+      firstIdx = i;
+    }
+  }
+  selected.add(firstIdx);
+  result.push(items[firstIdx]);
+
+  // Greedy pick: next = item with lowest max similarity to any selected
+  while (result.length < items.length) {
+    let bestIdx = -1;
+    let bestScore = Infinity;
+
+    for (let i = 0; i < items.length; i++) {
+      if (selected.has(i)) continue;
+      // max similarity to any already-selected item
+      let maxSim = 0;
+      for (const s of selected) {
+        const sim = fingerprintSimilarity(fingerprints[i], fingerprints[s]);
+        if (sim > maxSim) maxSim = sim;
+      }
+      if (maxSim < bestScore) {
+        bestScore = maxSim;
+        bestIdx = i;
+      }
+    }
+
+    if (bestIdx === -1) break;
+    selected.add(bestIdx);
+    result.push(items[bestIdx]);
+  }
+
+  // Append any remaining (theoretically unreachable)
+  for (let i = 0; i < items.length; i++) {
+    if (!selected.has(i)) result.push(items[i]);
+  }
+
+  return result;
 }
 
 /** Read linked files and extract relevant paragraphs. */
@@ -302,6 +432,51 @@ function getMemoryStatus(cwd: string): string {
 }
 
 // ============================================================
+// MarkItDown helper
+// ============================================================
+
+// Formats that need conversion (binary, unreadable by read tool)
+const BINARY_EXTENSIONS = new Set([
+  ".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls", ".epub", ".msg",
+]);
+
+function isBinaryFile(filePath: string): boolean {
+  const ext = path.extname(filePath).toLowerCase();
+  return BINARY_EXTENSIONS.has(ext);
+}
+
+/**
+ * Convert a binary file to Markdown via MarkItDown (WSL).
+ * Returns Markdown text on success, or null if conversion fails.
+ */
+function convertWithMarkitdown(filePath: string): string | null {
+  try {
+    // Resolve wsl.exe
+    const wslExe = process.env.WSL_EXE || "wsl.exe";
+
+    // Convert Windows path → WSL path via wslpath
+    const wslPath = execSync(
+      `${wslExe} wslpath -u "${filePath.replace(/\\/g, "/")}"`,
+      { encoding: "utf-8", timeout: 5000 },
+    ).trim();
+
+    if (!wslPath) return null;
+
+    // Run markitdown in WSL
+    const markitdownCmd = `${wslExe} ~/.markitdown-venv/bin/markitdown "${wslPath}"`;
+    const mdOutput = execSync(markitdownCmd, {
+      encoding: "utf-8",
+      timeout: 60000,
+      maxBuffer: 50 * 1024 * 1024, // 50MB max output
+    });
+
+    return mdOutput || null;
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================
 // Extension — register hooks & tools
 // ============================================================
 
@@ -354,6 +529,12 @@ export default function (pi: ExtensionAPI) {
     if (linkedContent.length > 0) {
       memoryContext += "\n\n---\n\n## Related Memories\n";
       memoryContext += linkedContent.join("\n\n");
+    }
+
+    // Compression guidelines (appended to system prompt)
+    const ccrStat = getCcrStats();
+    if (ccrStat.size > 0) {
+      memoryContext += `\n\n---\n\n## Active Compression Cache\n- ${ccrStat.size} items in CCR store\n- Use \`ccr_retrieve({ hash })\` to recover any compressed content.\n`;
     }
 
     // 6. Inject into system prompt
@@ -413,6 +594,51 @@ export default function (pi: ExtensionAPI) {
     }
 
     return { messages: filtered };
+  });
+
+  // ============================================================
+  // tool_result: auto-convert binary files + compress verbose output
+  // ============================================================
+  pi.on("tool_result", async (event, _ctx) => {
+    // MarkItDown: auto-convert binary files when read fails
+    if (event.toolName === "read" && event.isError) {
+      const filePath = (event.input as Record<string, unknown>)?.path as string | undefined;
+      if (filePath && isBinaryFile(filePath)) {
+        const md = convertWithMarkitdown(filePath);
+        if (md !== null) {
+          return {
+            content: [{ type: "text", text: md }],
+            details: {
+              converted: true,
+              originalFormat: path.extname(filePath).toLowerCase(),
+              note: "This file was automatically converted from " +
+                path.extname(filePath).toUpperCase() + " to Markdown via MarkItDown.",
+            },
+            isError: false,
+          };
+        }
+      }
+    }
+
+    // Content compression: compress bash tool outputs
+    if (event.toolName === "bash" && !event.isError) {
+      const outputText = (event.content?.[0] as { text?: string } | undefined)?.text;
+      if (outputText && outputText.length > 2048) {
+        const result = compressContent(outputText);
+        if (result) {
+          return {
+            content: [{ type: "text", text: result.compressed }],
+            details: {
+              compressed: true,
+              contentType: result.contentType,
+              ccrHash: result.hash,
+              stats: result.stats,
+            },
+            isError: false,
+          };
+        }
+      }
+    }
   });
 
   // ============================================================
@@ -700,7 +926,11 @@ ${params.content}${relatedLine}
         };
       }
 
-      const limited = results.slice(0, maxResults);
+      // Diversity sort: most unique results first, no results removed
+      const sorted = results.length > maxResults
+        ? diversitySort(results, (r) => r.replace(/^.*?\n/, ""))
+        : results;
+      const limited = sorted.slice(0, maxResults);
       const total = results.length;
 
       let output = `Found ${total} result(s)${total > maxResults ? ` (showing first ${maxResults})` : ""}:\n\n`;
@@ -1022,6 +1252,122 @@ ${params.content}${relatedLine}
       return {
         content: [{ type: "text", text: status }],
         details: {},
+      };
+    },
+  });
+
+  // ============================================================
+  // Tool: convert_file — convert binary files to Markdown via MarkItDown
+  // ============================================================
+  // ============================================================
+  // Tool: ccr_retrieve — get original content after compression
+  // ============================================================
+  pi.registerTool({
+    name: "ccr_retrieve",
+    label: "📦 Retrieve Original",
+    description:
+      "Retrieve the full original content that was automatically compressed " +
+      "to save context tokens. Call this when you need un-truncated data " +
+      "from a compressed tool output (identified by <<ccr:HASH>> markers).",
+    promptSnippet:
+      "Retrieve original compressed content by hash",
+    promptGuidelines: [
+      "Some tool outputs are auto-compressed and marked with <<ccr:HASH>>.",
+      "Use ccr_retrieve with the hash to get back the full original content.",
+      "Only call ccr_retrieve when the compressed summary is insufficient.",
+    ],
+    parameters: {
+      type: "object",
+      properties: {
+        hash: {
+          type: "string",
+          description: "The hash from the <<ccr:HASH>> marker to retrieve.",
+        },
+      },
+      required: ["hash"],
+    },
+    async execute(toolCallId, params, _signal, _onUpdate, _ctx) {
+      const hash = params.hash as string;
+      const original = ccrStore.get(hash);
+      if (!original) {
+        return {
+          content: [{ type: "text", text: `❌ Content with hash "${hash}" not found. It may have expired from the cache.` }],
+          details: {},
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: "text", text: original }],
+        details: { hash, length: original.length },
+        isError: false,
+      };
+    },
+  });
+
+  // ============================================================
+  // Tool: convert_file — convert binary files to Markdown via MarkItDown
+  // ============================================================
+  pi.registerTool({
+    name: "convert_file",
+    label: "📄 Convert to Markdown",
+    description:
+      "Convert binary files (PDF, Word, Excel, PowerPoint, ePub, etc.) " +
+      "to Markdown text using MarkItDown. Use this when you receive a " +
+      "file format that the read tool cannot handle.",
+    promptSnippet:
+      "Convert binary/document files to Markdown with MarkItDown",
+    promptGuidelines: [
+      "Use convert_file when you need to read a PDF, DOCX, XLSX, PPTX, " +
+      "or other binary document format that read cannot handle.",
+      "convert_file also works on HTML pages — use it to get clean " +
+      "Markdown from web pages you've saved locally.",
+    ],
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to the file to convert. Supports PDF, DOCX, " +
+            "PPTX, XLSX, XLS, EPUB, MSG, and HTML formats.",
+        },
+      },
+      required: ["path"],
+    },
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const filePath = params.path as string;
+
+      if (!fs.existsSync(filePath)) {
+        return {
+          content: [{ type: "text", text: `❌ File not found: ${filePath}` }],
+          details: {},
+          isError: true,
+        };
+      }
+
+      const ext = path.extname(filePath).toLowerCase();
+      const md = convertWithMarkitdown(filePath);
+
+      if (md === null) {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Conversion failed. Make sure MarkItDown is installed in WSL:
+  ~/.markitdown-venv/bin/markitdown
+
+Or install it: pip install markitdown (in WSL venv at ~/.markitdown-venv/)`,
+          }],
+          details: {},
+          isError: true,
+        };
+      }
+
+      return {
+        content: [{ type: "text", text: md }],
+        details: {
+          format: ext,
+          note: `Converted from ${ext.toUpperCase()} to Markdown via MarkItDown.`,
+        },
+        isError: false,
       };
     },
   });
