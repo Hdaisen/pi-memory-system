@@ -521,6 +521,49 @@ function getMemoryStatus(cwd: string): string {
   return summary;
 }
 
+/**
+ * Generate a brief human-readable summary of tool result content.
+ * Used in dedup markers to help the LLM decide if retrieval is needed.
+ */
+function generateContentSummary(text: string): string {
+  const lines = text.split("\n");
+  const totalLines = lines.length;
+  const size = text.length;
+
+  // Extract the first meaningful line (skip empty lines, dashes, comments)
+  let firstLine = "";
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed && !trimmed.startsWith("//") && !trimmed.startsWith("#") && trimmed !== "---") {
+      firstLine = trimmed.slice(0, 100);
+      break;
+    }
+  }
+
+  // Detect content type from patterns
+  let typeHint = "";
+  const totalText = text.slice(0, 500).toLowerCase();
+  if (totalText.includes("import ") || totalText.includes(": string") || totalText.includes("interface ")) {
+    typeHint = "TypeScript source";
+  } else if (totalText.includes("| 层级 |") || totalText.startsWith("# ")) {
+    typeHint = "Markdown document";
+  } else if (firstLine.match(/^[\w\/\\\.-]+:\d+:/)) {
+    typeHint = "Search results";
+  } else if (totalText.startsWith("[")) {
+    typeHint = "JSON data";
+  } else if (totalText.includes("total") && totalText.includes("commit")) {
+    typeHint = "Git output";
+  }
+
+  const parts: string[] = [];
+  if (typeHint) parts.push(typeHint);
+  parts.push(`${totalLines} lines`);
+  parts.push(`${(size / 1024).toFixed(1)}KB`);
+  if (firstLine) parts.push(`"${firstLine}"`);
+
+  return parts.join(", ");
+}
+
 // ============================================================
 // MarkItDown helper
 // ============================================================
@@ -724,10 +767,12 @@ export default function (pi: ExtensionAPI) {
       if (seenHashes.has(hash)) {
         const storeKey = `dedup:${hash}`;
         ccrStore.put(storeKey, text);
-        // Replace content with dedup marker
+        // Replace with a descriptive dedup marker
+        const summary = generateContentSummary(text);
+        const markerText = `[Deduplicated — ${summary}]\n<<ccr:${storeKey}>>`;
         const newContent = Array.isArray(m.content)
-          ? [{ type: "text" as const, text: `<<ccr:${storeKey}>>` }]
-          : `<<ccr:${storeKey}>>`;
+          ? [{ type: "text" as const, text: markerText }]
+          : markerText;
         filtered[i] = { ...m, content: newContent };
         dedupCount++;
       } else {
