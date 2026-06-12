@@ -339,6 +339,54 @@ const COMPRESS_THRESHOLD = 2048;
  *
  * Attempt order: JSON array → search output → repeated log
  */
+/**
+ * Generic fallback compressor: keep head + tail, omit middle.
+ * For any large text that didn't match JSON/search/log patterns.
+ */
+function tryCompressGenericText(text: string): CompressResult | null {
+  if (text.length < COMPRESS_THRESHOLD) return null;
+
+  const lines = text.split("\n");
+  const totalLines = lines.length;
+  if (totalLines < 20) return null;
+
+  const keepHead = 20;
+  const keepTail = 10;
+  const omitted = totalLines - keepHead - keepTail;
+
+  if (omitted <= 0) return null;
+
+  const head = lines.slice(0, keepHead);
+  const tail = lines.slice(-keepTail);
+  const compressed = [
+    `// ${totalLines} lines total (${omitted} lines omitted — use ccr_retrieve for full)`,
+    ...head,
+    `// ... ${omitted} lines omitted (ccr_retrieve to recover) ...`,
+    ...tail,
+  ].join("\n");
+
+  if (compressed.length >= text.length) return null;
+
+  const hash = contentHash(text);
+  return {
+    compressed,
+    contentType: "plain_text",
+    hash,
+    stats: {
+      originalLines: totalLines,
+      compressedLines: keepHead + keepTail + 2,
+      bytesOriginal: text.length,
+      bytesCompressed: compressed.length,
+    },
+  };
+}
+
+/**
+ * Try to compress text content. Returns null if content type is not
+ * recognized or compression wouldn't save enough bytes.
+ *
+ * Attempt order: JSON array → search output → repeated log → generic text
+ */
 export function compressContent(text: string): CompressResult | null {
   if (!text || text.length < COMPRESS_THRESHOLD) return null;
 
@@ -348,7 +396,8 @@ export function compressContent(text: string): CompressResult | null {
   const result =
     tryCompressJsonArray(text) ??
     tryCompressSearchOutput(text) ??
-    tryCompressRepeatedLog(text);
+    tryCompressRepeatedLog(text) ??
+    tryCompressGenericText(text);
 
   if (result) {
     // Store original for retrieval

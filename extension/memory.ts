@@ -736,10 +736,14 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    // Content compression: compress bash tool outputs
-    if (event.toolName === "bash" && !event.isError) {
+    // Content compression: compress large tool outputs
+    if (!event.isError) {
       const outputText = (event.content?.[0] as { text?: string } | undefined)?.text;
       if (outputText && outputText.length > 2048) {
+        // Skip already-compressed content
+        if (outputText.includes("<<ccr:")) return;
+
+        // Priority cache: if same content already compressed, return cached marker
         const result = compressContent(outputText);
         if (result) {
           return {
