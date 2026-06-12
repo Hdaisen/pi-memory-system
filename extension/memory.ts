@@ -27,16 +27,25 @@ import { compressContent, ccrStore, getCcrStats } from "./compress";
 
 const HOME = process.env.HOME || process.env.USERPROFILE || "~";
 
+/** Extract project name from working directory path. */
+function getProjectName(cwd: string): string {
+  return path.basename(cwd);
+}
+
 const PATHS = {
   // Global (agent-level)
   corePrompt: path.join(HOME, ".pi", "agent", "memory", "core-prompt.md"),
   rules: path.join(HOME, ".pi", "agent", "memory", "rules.md"),
   personalDir: path.join(HOME, ".pi", "agent", "memory", "personal"),
 
-  // Project-level (resolved dynamically from cwd)
-  projectDir: (cwd: string) => path.join(cwd, ".pi", "memory"),
-  notebook: (cwd: string) => path.join(cwd, ".pi", "memory", "notebook.md"),
-  memoriesDir: (cwd: string) => path.join(cwd, ".pi", "memory", "memories"),
+  // Project-level — centralized under ~/.pi/agent/memory/projects/<name>/
+  projectsRoot: path.join(HOME, ".pi", "agent", "memory", "projects"),
+  projectDir: (cwd: string) =>
+    path.join(HOME, ".pi", "agent", "memory", "projects", getProjectName(cwd)),
+  notebook: (cwd: string) =>
+    path.join(HOME, ".pi", "agent", "memory", "projects", getProjectName(cwd), "notebook.md"),
+  memoriesDir: (cwd: string) =>
+    path.join(HOME, ".pi", "agent", "memory", "projects", getProjectName(cwd), "memories"),
 };
 
 // ============================================================
@@ -98,23 +107,31 @@ function extractLinks(text: string): string[] {
 
 /** Resolve a [[Wiki-link]] to an actual file path. */
 function resolveLink(link: string, cwd: string): string | null {
+  // Check project memories first
   const projectMem = path.join(
     PATHS.memoriesDir(cwd),
     link.endsWith(".md") ? link : `${link}.md`,
   );
   if (fs.existsSync(projectMem)) return projectMem;
 
+  // Check project root (for notebook.md etc.)
   const projectRoot = path.join(
     PATHS.projectDir(cwd),
     link.endsWith(".md") ? link : `${link}.md`,
   );
   if (fs.existsSync(projectRoot)) return projectRoot;
 
+  // Check personal (global)
   const personal = path.join(
     PATHS.personalDir,
     link.endsWith(".md") ? link : `${link}.md`,
   );
   if (fs.existsSync(personal)) return personal;
+
+  // Legacy fallback: check old .pi/memory/ location
+  const oldProjectDir = path.join(cwd, ".pi", "memory");
+  const legacyMem = path.join(oldProjectDir, link.endsWith(".md") ? link : `${link}.md`);
+  if (fs.existsSync(legacyMem)) return legacyMem;
 
   return null;
 }
