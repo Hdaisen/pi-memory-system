@@ -1480,7 +1480,7 @@ Or install it: pip install markitdown (in WSL venv at ~/.markitdown-venv/)`,
     handler: async (_args, ctx) => {
       _refineSuppressed = true;
       ctx.ui.setStatus("refine", "⏸️ Context: /rec active (next msg won't trim)");
-      ctx.ui.notify("Context refinement suppressed for next message only.", "info");
+      return "⏸️ Context refinement suppressed for next message only. Send your next message normally — it won't trigger trimming.";
     },
   });
 
@@ -1493,11 +1493,9 @@ Or install it: pip install markitdown (in WSL venv at ~/.markitdown-venv/)`,
       "of old conversation history, keeping only the last 3 turns. " +
       "Use this when context feels bloated and you want a fresh view.",
     handler: async (_args, ctx) => {
-      ctx.ui.notify("Sent manual trim signal (takes effect next LLM call).", "info");
-      ctx.ui.setStatus("refine", "🧠 Trim: /trim requested");
-      // The trim is handled by the context event itself on the next call.
-      // Force the counter to be high so the next context event will trim.
       _userMessageCount = KEEP_RECENT_TURNS + 1;
+      ctx.ui.setStatus("refine", "🧠 Trim: /trim queued");
+      return `🧠 Trim queued. Next message will clean context (keep last ${KEEP_RECENT_TURNS} turns). You can still type /rec before sending to cancel.`;
     },
   });
 }
