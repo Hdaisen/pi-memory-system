@@ -30,6 +30,7 @@ const HOME = process.env.HOME || process.env.USERPROFILE || "~";
 const PATHS = {
   // Global (agent-level)
   corePrompt: path.join(HOME, ".pi", "agent", "memory", "core-prompt.md"),
+  rules: path.join(HOME, ".pi", "agent", "memory", "rules.md"),
   personalDir: path.join(HOME, ".pi", "agent", "memory", "personal"),
 
   // Project-level (resolved dynamically from cwd)
@@ -408,7 +409,9 @@ function getMemoryStatus(cwd: string): string {
   let summary = `## Memory System Status\n\n`;
 
   const coreExists = fs.existsSync(PATHS.corePrompt);
+  const rulesExist = fs.existsSync(PATHS.rules);
   summary += `- Core Prompt: ${coreExists ? "✅" : "❌"}\n`;
+  summary += `- Behavioral Rules: ${rulesExist ? "✅" : "❌"}\n`;
 
   const notebookExists = fs.existsSync(PATHS.notebook(cwd));
   summary += `- Session Notebook: ${notebookExists ? "✅" : "❌"}\n`;
@@ -523,10 +526,11 @@ export default function (pi: ExtensionAPI) {
     refreshIndex(cwd, "project");
     refreshIndex(cwd, "global");
 
-    // 1. Read core prompt
+    // 1. Read core prompt + behavioral rules
     const corePrompt = safeRead(PATHS.corePrompt);
     const coreSection =
       corePrompt || "# Core Prompt\n（Not initialized — please run the setup script）\n";
+    const rules = safeRead(PATHS.rules);
 
     // 2. Read session notebook
     const notebookContent = safeRead(PATHS.notebook(cwd));
@@ -548,8 +552,10 @@ export default function (pi: ExtensionAPI) {
     const userKeywords = event.prompt ? [event.prompt] : [];
     const linkedContent = readLinkedContent(links, cwd, userKeywords);
 
-    // 5. Assemble memory context
-    let memoryContext = `${coreSection}\n\n---\n\n${notebookSection}${indexSection}\n`;
+    // 5. Assemble memory context (rules injected right after core prompt)
+    let memoryContext = `${coreSection}\n`;
+    if (rules) memoryContext += `\n${rules}\n`;
+    memoryContext += `\n---\n\n${notebookSection}${indexSection}\n`;
 
     if (linkedContent.length > 0) {
       memoryContext += "\n\n---\n\n## Related Memories\n";
