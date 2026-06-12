@@ -18,6 +18,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import { compressContent, ccrStore, getCcrStats } from "./compress";
 
@@ -702,6 +703,43 @@ export default function (pi: ExtensionAPI) {
     // Reset counter post-cleanup (only KEEP_RECENT_TURNS user turns remain)
     _userMessageCount = KEEP_RECENT_TURNS;
     ctx.ui.setStatus("refine", `🧠 Trim: ✅ cleaned (/trim to force)`);
+    // Dedup pass: collapse identical tool results within the 3-turn window
+    let dedupCount = 0;
+    const seenHashes = new Set<string>();
+    for (let i = 0; i < filtered.length; i++) {
+      const m = filtered[i];
+      if (m.role !== "tool") continue;
+
+      // Extract text from tool result
+      let text = "";
+      if (typeof m.content === "string") {
+        text = m.content;
+      } else if (Array.isArray(m.content)) {
+        text = m.content.map((c: { text?: string }) => c.text || "").join("\n");
+      }
+      if (!text || text.length < 200) continue;
+
+      const hash = crypto.createHash("sha256").update(text).digest("hex");
+
+      if (seenHashes.has(hash)) {
+        const storeKey = `dedup:${hash}`;
+        ccrStore.put(storeKey, text);
+        // Replace content with dedup marker
+        const newContent = Array.isArray(m.content)
+          ? [{ type: "text" as const, text: `<<ccr:${storeKey}>>` }]
+          : `<<ccr:${storeKey}>>`;
+        filtered[i] = { ...m, content: newContent };
+        dedupCount++;
+      } else {
+        seenHashes.add(hash);
+      }
+    }
+
+    // Reset counter post-cleanup (only KEEP_RECENT_TURNS user turns remain)
+    _userMessageCount = KEEP_RECENT_TURNS;
+    let statusText = `🧠 Trim: ✅ cleaned (kept ${KEEP_RECENT_TURNS} user turns)`;
+    if (dedupCount > 0) statusText += `, ${dedupCount} deduped`;
+    ctx.ui.setStatus("refine", statusText);
     return { messages: filtered };
   });
 
@@ -736,14 +774,10 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    // Content compression: compress large tool outputs
-    if (!event.isError) {
+    // Content compression: compress bash tool outputs
+    if (event.toolName === "bash" && !event.isError) {
       const outputText = (event.content?.[0] as { text?: string } | undefined)?.text;
       if (outputText && outputText.length > 2048) {
-        // Skip already-compressed content
-        if (outputText.includes("<<ccr:")) return;
-
-        // Priority cache: if same content already compressed, return cached marker
         const result = compressContent(outputText);
         if (result) {
           return {
