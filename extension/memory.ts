@@ -46,6 +46,33 @@ const PATHS = {
 //    3 is a good balance between information retention and context cleanliness.
 const KEEP_RECENT_TURNS = 3;
 
+// 🔒 When true, the next context refinement is suppressed.
+//    Set via /rec command. Reset automatically after one suppression.
+let _refineSuppressed = false;
+
+/**
+ * Compute the context refinement status for display.
+ * Returns a short status string for ctx.ui.setStatus.
+ */
+function getRefineStatus(ctx: {
+  sessionManager: { getEntries: () => Array<{ role: string }> };
+}): string {
+  if (_refineSuppressed) return "⏸️ Context: /rec active";
+
+  const entries = ctx.sessionManager.getEntries();
+  let userMsgCount = 0;
+  for (const e of entries) {
+    if (e.role === "user") userMsgCount++;
+  }
+
+  if (userMsgCount <= KEEP_RECENT_TURNS) {
+    const remaining = KEEP_RECENT_TURNS - userMsgCount + 1;
+    return `🧠 Trim: ${userMsgCount}/${KEEP_RECENT_TURNS} (${remaining} more msg${remaining > 1 ? "s" : ""})`;
+  }
+
+  return `🧠 Trim: ✅ next msg → clean (${userMsgCount} user msgs)`;
+}
+
 // ============================================================
 // Helpers
 // ============================================================
@@ -485,7 +512,9 @@ export default function (pi: ExtensionAPI) {
   // session_start
   // ============================================================
   pi.on("session_start", async (_event, ctx) => {
+    _refineSuppressed = false;
     ctx.ui.setStatus("memory", "🧠 Memory system ready");
+    ctx.ui.setStatus("refine", getRefineStatus(ctx));
   });
 
   // ============================================================
@@ -558,9 +587,16 @@ export default function (pi: ExtensionAPI) {
   //     total message payload is genuinely large. And only trim at
   //     the START of a user turn (not mid-turn during tool loops).
   // ============================================================
-  pi.on("context", async (event, _ctx) => {
+  pi.on("context", async (event, ctx) => {
     const messages = event.messages;
     if (!messages || messages.length <= 5) return;
+
+    // /rec suppression: skip cleanup once, then reset
+    if (_refineSuppressed) {
+      _refineSuppressed = false;
+      ctx.ui.setStatus("refine", getRefineStatus(ctx));
+      return;
+    }
 
     const userMsgIndices: number[] = [];
     const systemIndices: number[] = [];
@@ -578,7 +614,10 @@ export default function (pi: ExtensionAPI) {
     if (lastMsg && lastMsg.role !== "user") return;
 
     // Only trim if there are more than KEEP_RECENT_TURNS user messages.
-    if (userMsgIndices.length <= KEEP_RECENT_TURNS) return;
+    if (userMsgIndices.length <= KEEP_RECENT_TURNS) {
+      ctx.ui.setStatus("refine", getRefineStatus(ctx));
+      return;
+    }
 
     const keepFrom = userMsgIndices[userMsgIndices.length - KEEP_RECENT_TURNS];
     const filtered: typeof messages = [];
@@ -593,7 +632,15 @@ export default function (pi: ExtensionAPI) {
       filtered.push(messages[i]);
     }
 
+    ctx.ui.setStatus("refine", `🧠 Trim: ✅ cleaned (kept ${KEEP_RECENT_TURNS} user turns)`);
     return { messages: filtered };
+  });
+
+  // ============================================================
+  // agent_end: update refinement status after each turn
+  // ============================================================
+  pi.on("agent_end", async (_event, ctx) => {
+    ctx.ui.setStatus("refine", getRefineStatus(ctx));
   });
 
   // ============================================================
@@ -1419,6 +1466,21 @@ Or install it: pip install markitdown (in WSL venv at ~/.markitdown-venv/)`,
         }],
         details: { confirmed },
       };
+    },
+  });
+
+  // ============================================================
+  // Command: /rec — suppress context refinement for next turn
+  // ============================================================
+  pi.registerCommand("rec", {
+    description:
+      "Suppress context refinement for the next user message. " +
+      "Use this in extreme cases when you don't want old context cleaned yet. " +
+      "Reset happens automatically after one suppressed turn.",
+    handler: async (_args, ctx) => {
+      _refineSuppressed = true;
+      ctx.ui.setStatus("refine", "⏸️ Context: /rec active (next msg won't trim)");
+      ctx.ui.notify("Context refinement suppressed for next message only.", "info");
     },
   });
 }
