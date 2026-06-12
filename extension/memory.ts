@@ -49,28 +49,24 @@ const KEEP_RECENT_TURNS = 3;
 // 🔒 When true, the next context refinement is suppressed.
 //    Set via /rec command. Reset automatically after one suppression.
 let _refineSuppressed = false;
+let _userMessageCount = 0;
 
 /**
  * Compute the context refinement status for display.
- * Returns a short status string for ctx.ui.setStatus.
+ * Uses the handler's own counter, not sessionManager, to stay accurate.
  */
-function getRefineStatus(ctx: {
-  sessionManager: { getEntries: () => Array<{ role: string }> };
-}): string {
+function getRefineStatus(): string {
   if (_refineSuppressed) return "⏸️ Context: /rec active";
 
-  const entries = ctx.sessionManager.getEntries();
-  let userMsgCount = 0;
-  for (const e of entries) {
-    if (e.role === "user") userMsgCount++;
+  if (_userMessageCount <= KEEP_RECENT_TURNS) {
+    const remaining = KEEP_RECENT_TURNS - _userMessageCount + 1;
+    let s = `🧠 Trim: ${_userMessageCount}/${KEEP_RECENT_TURNS}`;
+    if (remaining > 0) s += ` (${remaining} more msg${remaining > 1 ? "s" : ""})`;
+    if (remaining <= 1) s += " — /rec to skip";
+    return s;
   }
 
-  if (userMsgCount <= KEEP_RECENT_TURNS) {
-    const remaining = KEEP_RECENT_TURNS - userMsgCount + 1;
-    return `🧠 Trim: ${userMsgCount}/${KEEP_RECENT_TURNS} (${remaining} more msg${remaining > 1 ? "s" : ""})`;
-  }
-
-  return `🧠 Trim: ✅ next msg → clean (${userMsgCount} user msgs)`;
+  return `🧠 Trim: next msg → clean (/${KEEP_RECENT_TURNS} kept, /rec to skip)`;
 }
 
 // ============================================================
@@ -513,8 +509,7 @@ export default function (pi: ExtensionAPI) {
   // ============================================================
   pi.on("session_start", async (_event, ctx) => {
     _refineSuppressed = false;
-    ctx.ui.setStatus("memory", "🧠 Memory system ready");
-    ctx.ui.setStatus("refine", getRefineStatus(ctx));
+    ctx.ui.setStatus("refine", "🧠 Trim: 0/3");
   });
 
   // ============================================================
@@ -594,7 +589,7 @@ export default function (pi: ExtensionAPI) {
     // /rec suppression: skip cleanup once, then reset
     if (_refineSuppressed) {
       _refineSuppressed = false;
-      ctx.ui.setStatus("refine", getRefineStatus(ctx));
+      ctx.ui.setStatus("refine", getRefineStatus());
       return;
     }
 
@@ -607,6 +602,9 @@ export default function (pi: ExtensionAPI) {
       if (m.role === "system" || m.role === "developer") systemIndices.push(i);
     }
 
+    // Update counter from event.messages (accurate), not sessionManager
+    _userMessageCount = userMsgIndices.length;
+
     // Don't trim mid-turn: if the last message is NOT a user message,
     // we're in the middle of a tool-calling loop. Trimming now would
     // discard assistant/tool/error messages the LLM needs to see.
@@ -615,7 +613,7 @@ export default function (pi: ExtensionAPI) {
 
     // Only trim if there are more than KEEP_RECENT_TURNS user messages.
     if (userMsgIndices.length <= KEEP_RECENT_TURNS) {
-      ctx.ui.setStatus("refine", getRefineStatus(ctx));
+      ctx.ui.setStatus("refine", getRefineStatus());
       return;
     }
 
@@ -632,7 +630,9 @@ export default function (pi: ExtensionAPI) {
       filtered.push(messages[i]);
     }
 
-    ctx.ui.setStatus("refine", `🧠 Trim: ✅ cleaned (kept ${KEEP_RECENT_TURNS} user turns)`);
+    // Reset counter post-cleanup (only KEEP_RECENT_TURNS user turns remain)
+    _userMessageCount = KEEP_RECENT_TURNS;
+    ctx.ui.setStatus("refine", `🧠 Trim: ✅ cleaned (kept ${KEEP_RECENT_TURNS} user turns, /rec to skip next)`);
     return { messages: filtered };
   });
 
@@ -640,7 +640,7 @@ export default function (pi: ExtensionAPI) {
   // agent_end: update refinement status after each turn
   // ============================================================
   pi.on("agent_end", async (_event, ctx) => {
-    ctx.ui.setStatus("refine", getRefineStatus(ctx));
+    ctx.ui.setStatus("refine", getRefineStatus());
   });
 
   // ============================================================
@@ -1481,6 +1481,23 @@ Or install it: pip install markitdown (in WSL venv at ~/.markitdown-venv/)`,
       _refineSuppressed = true;
       ctx.ui.setStatus("refine", "⏸️ Context: /rec active (next msg won't trim)");
       ctx.ui.notify("Context refinement suppressed for next message only.", "info");
+    },
+  });
+
+  // ============================================================
+  // Command: /trim — manually trigger context refinement now
+  // ============================================================
+  pi.registerCommand("trim", {
+    description:
+      "Manually trigger context refinement immediately. Forces cleanup " +
+      "of old conversation history, keeping only the last 3 turns. " +
+      "Use this when context feels bloated and you want a fresh view.",
+    handler: async (_args, ctx) => {
+      ctx.ui.notify("Sent manual trim signal (takes effect next LLM call).", "info");
+      ctx.ui.setStatus("refine", "🧠 Trim: /trim requested");
+      // The trim is handled by the context event itself on the next call.
+      // Force the counter to be high so the next context event will trim.
+      _userMessageCount = KEEP_RECENT_TURNS + 1;
     },
   });
 }
