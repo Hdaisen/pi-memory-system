@@ -18,7 +18,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as crypto from "node:crypto";
 import { execSync } from "node:child_process";
 // compression handled by context-mode extension — memory.ts no longer imports compress.ts
 
@@ -699,123 +698,8 @@ function updateTaskWidget(cwd: string, ctx: any): void {
 // raw.md generation — format conversation + tool results to Markdown
 // ============================================================
 
-const RAW_LARGE_OUTPUT_THRESHOLD = 5120; // 5KB
-
-/**
- * Write the current turn's messages to turns/raw.md for subagent processing.
- * Large tool results (>5KB) are truncated + hashed; full content saved to turns/raw/<hash>.txt.
- */
-function writeRawMd(cwd: string, messages: any[]): void {
-  const turnsDir = PATHS.turnsDir(cwd);
-  const rawDir = path.join(turnsDir, "raw");
-  fs.mkdirSync(rawDir, { recursive: true });
-
-  const timestamp = new Date().toISOString();
-  let md = `# Turn — ${timestamp}\n\n`;
-
-  for (const msg of messages) {
-    const role = msg.role || "unknown";
-    const content = msg.content || "";
-    const toolCalls = msg.tool_calls;
-
-    if (role === "system" || role === "developer") {
-      // Truncate system messages: keep first 200 chars per block
-      const lines = content.split("\n");
-      const truncated = lines.slice(0, 10).join("\n");
-      md += `## System\n> ${truncated.slice(0, 500)}...\n\n`;
-      continue;
-    }
-
-    if (role === "user") {
-      md += `## User\n${content}\n\n`;
-      continue;
-    }
-
-    if (role === "assistant") {
-      if (content) {
-        md += `## Assistant\n${content}\n\n`;
-      }
-      if (toolCalls && Array.isArray(toolCalls)) {
-        for (const tc of toolCalls) {
-          const func = tc.function || {};
-          const toolName = func.name || "unknown";
-          let args = "";
-          try {
-            const parsed = JSON.parse(func.arguments || "{}");
-            // Redact sensitive fields
-            if (parsed.token) parsed.token = "***";
-            if (parsed.apiKey) parsed.apiKey = "***";
-            if (parsed.key) parsed.key = "***";
-            if (parsed.password) parsed.password = "***";
-            args = JSON.stringify(parsed, null, 2);
-          } catch {
-            args = func.arguments || "";
-          }
-          md += `## Tool Call: ${toolName}\n\`\`\`json\n${args}\n\`\`\`\n\n`;
-        }
-      }
-      continue;
-    }
-
-    if (role === "tool") {
-      const toolName = msg.name || (msg.tool_name as string) || "";
-      const toolResult = typeof content === "string" ? content : JSON.stringify(content);
-
-      md += `## Tool Result: ${toolName}\n`;
-
-      if (toolResult.length > RAW_LARGE_OUTPUT_THRESHOLD) {
-        // Hash + truncate
-        const hash = crypto.createHash("sha256").update(toolResult).digest("hex").slice(0, 12);
-        const fullPath = path.join(rawDir, `${hash}.txt`);
-        fs.writeFileSync(fullPath, toolResult, "utf-8");
-
-        const head = toolResult.split("\n").slice(0, 50).join("\n");
-        const tail = toolResult.split("\n").slice(-20).join("\n");
-        md += `> (截断, full → turns/raw/${hash}.txt) 共 ${toolResult.length} bytes\n\n\`\`\`\n${head}\n\n... (${toolResult.split("\n").length - 70} 行截断) ...\n\n${tail}\n\`\`\`\n\n`;
-      } else {
-        md += `\`\`\`\n${toolResult}\n\`\`\`\n\n`;
-      }
-      continue;
-    }
-
-    // Fallback for unknown roles
-    md += `## ${role}\n${content}\n\n`;
-  }
-
-  // Write raw.md
-  const rawMdPath = path.join(turnsDir, "raw.md");
-  fs.writeFileSync(rawMdPath, md, "utf-8");
-}
-
 // ============================================================
-// Subagent spawning — run a Pi child process for memory extraction
-// ============================================================
-
-/**
- * Spawn a non-interactive Pi process to run memory extraction.
- * Reads raw.md, writes essence.md, updates notebook, calls remember.
- */
-function spawnSubagent(cwd: string): void {
-  const extractorPrompt = path.join(HOME, ".pi", "agent", "agents", "memory-extractor.md");
-  const rawMdPath = path.join(PATHS.turnsDir(cwd), "raw.md");
-
-  // 使用 PATH 中的 pi 命令（scoop/npm 安装的全局 pi）
-  const cmd = [
-    `pi`,
-    "-p",
-    "--no-session",
-    `--tools read,write,edit,remember,recall,notebook,forget,supersede`,
-    `--append-system-prompt @"${extractorPrompt}"`,
-    `"Read ${rawMdPath} and perform the memory extraction tasks."`
-  ].join(" ");
-
-  execSync(cmd, {
-    cwd,
-    timeout: 120000,
-    stdio: "pipe",
-    env: { ...process.env, PI_SUBAGENT: "1" }
-  });
-}
+// Extension — register hooks & tools
 
 // ============================================================
 // Extension — register hooks & tools
@@ -907,50 +791,28 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ============================================================
-  // agent_end: pipe messages to Python → spawn subagent
+  // agent_end: call Python script (format + subagent)
   // ============================================================
   pi.on("agent_end", async (_event, ctx) => {
     const cwd = ctx.cwd;
 
-    // 跳过子代理自身触发的 agent_end（避免递归循环）
     if (process.env.PI_SUBAGENT === "1") return;
 
     const messages = (_event as any)?.messages;
     if (messages && Array.isArray(messages)) {
-      const turnsDir = PATHS.turnsDir(cwd);
-      const rawDir = path.join(turnsDir, "raw");
-      fs.mkdirSync(rawDir, { recursive: true });
-
-      // 管道传 JSON 给 Python 脚本，不写中间文件
       ctx.ui.setStatus("memory", "🧠 🟡");
-      const scriptPath = path.join(HOME, ".pi", "agent", "scripts", "write_raw.py");
-      const outputPath = path.join(turnsDir, "raw.md");
-      const jsonInput = JSON.stringify(messages);
-      const pythonCmd = [
-        `python3`,
-        `"${scriptPath}"`,
-        `--input -`,
-        `--output "${outputPath}"`,
-        `--raw-dir "${rawDir}"`
-      ].join(" ");
+      const scriptPath = path.join(HOME, ".pi", "agent", "scripts", "run_extraction.py");
       try {
-        execSync(pythonCmd, {
+        execSync(`python3 "${scriptPath}"`, {
           cwd,
-          timeout: 30000,
+          timeout: 180000,
           stdio: ["pipe", "pipe", "pipe"],
-          input: jsonInput
+          input: JSON.stringify(messages),
+          env: { ...process.env, PI_SUBAGENT: "1" }
         });
-      } catch (e) {
-        console.warn("[memory] write_raw.py failed:", e);
-      }
-
-      // 启动子代理
-      ctx.ui.setStatus("memory", "🧠 🟡");
-      try {
-        spawnSubagent(cwd);
         ctx.ui.setStatus("memory", "🧠 🟢");
       } catch (e) {
-        console.warn("[memory] Subagent extraction failed:", e);
+        console.warn("[memory] extraction failed:", e);
         ctx.ui.setStatus("memory", "🧠 🔴");
       }
     }
