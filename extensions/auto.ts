@@ -1,22 +1,21 @@
 /**
- * Auto — autonomous task execution loop for Pi
+ * Auto — 自主任务执行循环
  *
- * Maps Ralph's loop pattern to Pi's extension system:
- *   ralph.sh (bash)  →  auto.ts (extension via agent_end + sendUserMessage)
- *   prd.json          →  spec tasks.md
- *   <promise>COMPLETE →  tasks.md 全部 [x]
- *   claude --print    →  LLM worker via sendUserMessage
+ * 读取 spec tasks.md，逐个分发 pending 任务，每轮完成后自动触发下一个。
+ * agent_end hook 是循环 driver，sendUserMessage 是分派机制。
  *
- * The extension is the orchestrator. It reads tasks.md, picks pending tasks,
- * and dispatches them to the LLM one at a time. After each turn, agent_end
- * fires → extension checks if task was completed → next or pause.
+ * 底层设计借鉴了 snarktank/ralph 的模式：
+ *   bash for 循环 → agent_end hook
+ *   prd.json      → tasks.md
+ *   COMPLETE 标记 → tasks.md 全部 [x]
+ *   claude --print → sendUserMessage
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
 // ============================================================
-// State
+// 状态
 // ============================================================
 
 interface AutoSession {
@@ -47,7 +46,7 @@ function clearState(cwd: string): void {
 }
 
 // ============================================================
-// Tasks.md parser
+// tasks.md 解析器
 // ============================================================
 
 interface TaskItem {
@@ -94,7 +93,7 @@ function parseTasks(tasksFile: string): {
 }
 
 // ============================================================
-// Find latest spec with tasks.md
+// 查找最新有 tasks.md 的 spec
 // ============================================================
 
 function findLatestSpec(cwd: string): string | null {
@@ -125,15 +124,15 @@ function findLatestSpec(cwd: string): string | null {
 }
 
 // ============================================================
-// Status bar widget
+// 状态栏组件
 // ============================================================
 
 function updateWidget(ctx: any, s: AutoSession): void {
   const lines = [
-    `📋 Auto: ${s.completedCount}/${s.totalTasks} tasks`,
-    s.stopped ? "⏸️ Paused" : s.active ? "▶️ Active" : "",
+    `📋 Auto: ${s.completedCount}/${s.totalTasks} 个任务`,
+    s.stopped ? "⏸️ 已暂停" : s.active ? "▶️ 执行中" : "",
   ].filter(Boolean);
-  ctx.ui.setWidget("auto", lines.length > 0 ? lines : ["📋 Auto: idle"]);
+  ctx.ui.setWidget("auto", lines.length > 0 ? lines : ["📋 Auto: 空闲"]);
 }
 
 // ============================================================
@@ -166,7 +165,7 @@ export default function (pi: ExtensionAPI) {
     return null;
   }
 
-  // Auto-run marker — agent_end detects new tasks.md and starts the loop
+  // 自动执行标记 —— agent_end 检测到新 tasks.md 产生后自动启动循环
   function setAutoRun(cwd: string, description: string): void {
     const file = path.join(cwd, ".auto-autorun.json");
     fs.writeFileSync(file, JSON.stringify({ description, createdAt: Date.now() }), "utf-8");
@@ -179,11 +178,11 @@ export default function (pi: ExtensionAPI) {
   }
 
   // ============================================================
-  // Commands
+  // 命令
   // ============================================================
 
   pi.registerCommand("auto", {
-    description: "Autonomous task execution loop. Usage: /auto do <description> | run | status | stop | resume",
+    description: "自主任务执行循环。用法: /auto do <描述> | run | status | stop | resume",
     handler: async (args, ctx) => {
       const cwd = ctx.cwd;
       const parts = (args ?? "").trim().split(/\s+/);
@@ -191,16 +190,16 @@ export default function (pi: ExtensionAPI) {
 
       switch (subcmd) {
 
-        // ========== /auto do <description> ==========
+        // ========== /auto do <描述> ==========
         case "do": {
           const description = parts.slice(1).join(" ");
           if (!description) {
-            ctx.ui.notify("Usage: /auto do <description of what to implement>", "warn");
+            ctx.ui.notify("用法: /auto do <要做什么的描述>", "warn");
             return;
           }
 
           setAutoRun(cwd, description);
-          ctx.ui.notify(`Auto: generating spec + tasks for: ${description}`, "info");
+          ctx.ui.notify(`Auto: 正在生成任务规划: ${description}`, "info");
 
           pi.sendUserMessage(
             `📋 [Auto] Generate a feature specification and task breakdown for:\n\n` +
@@ -219,7 +218,7 @@ export default function (pi: ExtensionAPI) {
         case "run": {
           const specDir = findLatestSpec(cwd);
           if (!specDir) {
-            ctx.ui.notify("No spec with tasks.md found in specs/", "error");
+            ctx.ui.notify("在 specs/ 中未找到有 tasks.md 的 spec", "error");
             return;
           }
 
@@ -227,10 +226,10 @@ export default function (pi: ExtensionAPI) {
           const { pending, all } = parseTasks(tasksFile);
 
           if (pending.length === 0) {
-            ctx.ui.notify("All tasks already completed!", "info");
+            ctx.ui.notify("所有任务已完成！", "info");
             clearState(cwd);
             sessions.delete(cwd);
-            ctx.ui.setWidget("auto", ["📋 Auto: all complete!"]);
+            ctx.ui.setWidget("auto", ["✅ Auto: 全部完成"]);
             return;
           }
 
@@ -249,7 +248,7 @@ export default function (pi: ExtensionAPI) {
           updateWidget(ctx, session);
 
           const first = pending[0];
-          ctx.ui.notify(`Auto: ${session.completedCount}/${session.totalTasks} — starting ${first.id}`, "info");
+          ctx.ui.notify(`Auto: ${session.completedCount}/${session.totalTasks} — 开始执行 ${first.id}`, "info");
           pi.sendUserMessage(
             `🎯 [Auto] Implement task **${first.id}** from ${path.basename(specDir)}:\n\n` +
             `Phase: *${first.phase || "—"}*\n\n` +
@@ -268,14 +267,14 @@ export default function (pi: ExtensionAPI) {
         case "stop": {
           const session = getOrCreateSession(cwd);
           if (!session) {
-            ctx.ui.notify("No active auto session.", "info");
+            ctx.ui.notify("没有活跃的 Auto 会话", "info");
             return;
           }
           session.active = false;
           session.stopped = true;
           saveState(session);
           updateWidget(ctx, session);
-          ctx.ui.notify("Auto paused.", "info");
+          ctx.ui.notify("⏸️ Auto 已暂停", "info");
           return;
         }
 
@@ -283,7 +282,7 @@ export default function (pi: ExtensionAPI) {
         case "resume": {
           const session = getOrCreateSession(cwd);
           if (!session) {
-            ctx.ui.notify("No saved auto session found.", "info");
+            ctx.ui.notify("没有保存的 Auto 会话", "info");
             return;
           }
           session.active = true;
@@ -296,14 +295,14 @@ export default function (pi: ExtensionAPI) {
           updateWidget(ctx, session);
 
           if (pending.length === 0) {
-            ctx.ui.notify("All tasks complete! Clearing session.", "info");
+            ctx.ui.notify("所有任务已全部完成！清除会话。", "info");
             clearState(cwd);
             sessions.delete(cwd);
             return;
           }
 
           const next = pending[0];
-          ctx.ui.notify(`Auto resumed: next up ${next.id}`, "info");
+          ctx.ui.notify(`Auto 已恢复: 下一个任务 ${next.id}`, "info");
           pi.sendUserMessage(
             `🎯 [Auto] Resume — implement task **${next.id}**:\n\n` +
             `\`\`\`\n${next.line}\n\`\`\`\n\n` +
@@ -319,21 +318,21 @@ export default function (pi: ExtensionAPI) {
           const specDir = findLatestSpec(cwd);
           const session = getOrCreateSession(cwd);
 
-          let msg = "## Auto Status\n\n";
+          let msg = "## Auto 状态\n\n";
           if (specDir) {
             const { all, pending } = parseTasks(path.join(specDir, "tasks.md"));
             msg += `Spec: \`${path.basename(specDir)}\`\n`;
-            msg += `Tasks: ${all.length} total, ${pending.length} pending\n\n`;
+            msg += `任务: 共 ${all.length} 个，待办 ${pending.length} 个\n\n`;
             if (pending.length > 0) {
-              msg += `Next up: \`${pending[0].line.trim()}\`\n`;
+              msg += `下一个: \`${pending[0].line.trim()}\`\n`;
             }
             if (session) {
-              msg += `\nSession: ${session.active ? "▶️ Active" : session.stopped ? "⏸️ Paused" : "💤 Idle"}\n`;
-              msg += `Completed: ${session.completedCount}/${session.totalTasks}\n`;
+              msg += `\n会话: ${session.active ? "▶️ 执行中" : session.stopped ? "⏸️ 已暂停" : "💤 空闲"}\n`;
+              msg += `已完成: ${session.completedCount}/${session.totalTasks}\n`;
             }
           } else {
-            msg += "No spec with tasks.md found.\n";
-            msg += "Run `/auto do <description>` to create and execute a feature.\n";
+            msg += "未找到有 tasks.md 的 spec。\n";
+            msg += "运行 `/auto do <描述>` 来创建并执行一个功能。\n";
           }
           ctx.ui.notify(msg, "info");
           return;
@@ -343,13 +342,13 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ============================================================
-  // agent_end — the loop driver
+  // agent_end — 循环 driver
   // ============================================================
   pi.on("agent_end", async (_event, ctx) => {
     const cwd = ctx.cwd;
     const session = getOrCreateSession(cwd);
 
-    // Check for auto-run: tasks.md just created via /auto do
+    // 检查自动执行标记：/auto do 刚生成 tasks.md
     if (!session || !session.active) {
       if (hasAutoRun(cwd)) {
         const specDir = findLatestSpec(cwd);
@@ -357,7 +356,7 @@ export default function (pi: ExtensionAPI) {
           const tf = path.join(specDir, "tasks.md");
           if (fs.existsSync(tf)) {
             clearAutoRun(cwd);
-            ctx.ui.notify(`Auto: tasks.md detected in ${path.basename(specDir)}, starting...`, "info");
+            ctx.ui.notify(`Auto: 检测到 tasks.md (${path.basename(specDir)})，自动启动执行...`, "info");
 
             const { pending, all } = parseTasks(tf);
             if (pending.length > 0) {
@@ -392,15 +391,15 @@ export default function (pi: ExtensionAPI) {
 
     if (session.stopped) return;
 
-    // Re-read tasks.md to check progress
+    // 重新读取 tasks.md 检查进度
     const { pending, all } = parseTasks(session.tasksFile);
     session.completedCount = all.length - pending.length;
     saveState(session);
     updateWidget(ctx, session);
 
     if (pending.length === 0) {
-      ctx.ui.notify(`✅ Auto: ALL ${all.length} tasks complete!`, "info");
-      ctx.ui.setWidget("auto", [`✅ Auto: all ${all.length} tasks done`]);
+      ctx.ui.notify(`✅ Auto: 全部 ${all.length} 个任务已完成！`, "info");
+      ctx.ui.setWidget("auto", [`✅ Auto: ${all.length} 个任务全部完成`]);
       clearState(cwd);
       sessions.delete(cwd);
       pi.sendUserMessage(
@@ -410,7 +409,7 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    // Check if the dispatched task was completed
+    // 检查上次分发的任务是否已完成
     const completedNow = all.filter(t => !t.line.startsWith("- [ ]"));
     const wasCompleted = !session.lastTask || completedNow.some(t => {
       const idMatch = t.line.match(/\[x\] (T\d+)/);
@@ -421,8 +420,8 @@ export default function (pi: ExtensionAPI) {
       session.active = false;
       saveState(session);
       ctx.ui.notify(
-        `⚠️ Auto paused: ${session.lastTask} was not marked complete.\n` +
-        "Use `/auto resume` to retry or `/auto stop` to cancel.",
+        `⚠️ Auto 已暂停: ${session.lastTask} 未标记完成。\n` +
+        "使用 `/auto resume` 重试或 `/auto stop` 取消。",
         "warn"
       );
       return;
@@ -432,7 +431,7 @@ export default function (pi: ExtensionAPI) {
     session.lastTask = next.id;
     saveState(session);
 
-    ctx.ui.notify(`✅ ${session.completedCount}/${session.totalTasks} — next: ${next.id}`, "info");
+    ctx.ui.notify(`✅ ${session.completedCount}/${session.totalTasks} — 下一个: ${next.id}`, "info");
 
     pi.sendUserMessage(
       `🎯 [Auto] ✅ Task complete. Next up: **${next.id}**:\n\n` +
