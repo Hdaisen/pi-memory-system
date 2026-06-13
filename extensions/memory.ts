@@ -796,44 +796,19 @@ function writeRawMd(cwd: string, messages: any[]): void {
  * Reads raw.md, writes essence.md, updates notebook, calls remember.
  */
 function spawnSubagent(cwd: string): void {
-  // Find pi CLI path — avoid jiti's broken require.resolve
-  const piCli = (() => {
-    // Try the common global install locations
-    const candidates = [
-      // Global npm install: node.exe is in the same dir as node_modules
-      path.join(path.dirname(process.execPath), "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js"),
-    ];
-    for (const c of candidates) {
-      if (fs.existsSync(c)) return c;
-    }
-    // Fallback: resolve from the global node_modules
-    try {
-      return require.resolve("@earendil-works/pi-coding-agent/dist/cli.js");
-    } catch {}
-    return "";
-  })();
-  if (!piCli || !fs.existsSync(piCli)) {
-    console.warn("[memory] pi CLI not found, skipping subagent extraction");
-    return;
-  }
-  const nodeExe = process.execPath;
   const extractorPrompt = path.join(HOME, ".pi", "agent", "agents", "memory-extractor.md");
   const rawMdPath = path.join(PATHS.turnsDir(cwd), "raw.md");
 
-  // Prepare the task instruction
+  // 使用 PATH 中的 pi 命令（scoop/npm 安装的全局 pi）
   const cmd = [
-    `"${nodeExe}"`,
-    `"${piCli}"`,
-    "-p",              // non-interactive print mode
-    "--no-session",    // ephemeral, no session file
-    "--no-skills",     // skip skills (speedup)
-    "--no-themes",     // skip themes (speedup)
-    "--tools read,write,edit,remember,recall,notebook,forget,supersede",  // only needed tools
+    `pi`,
+    "-p",
+    "--no-session",
+    `--tools read,write,edit,remember,recall,notebook,forget,supersede`,
     `--append-system-prompt @"${extractorPrompt}"`,
     `"Read ${rawMdPath} and perform the memory extraction tasks."`
   ].join(" ");
 
-  // The timeout is generous — even verbose rounds rarely exceed 30s
   execSync(cmd, {
     cwd,
     timeout: 120000,
