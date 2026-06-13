@@ -21,6 +21,12 @@ import * as path from "node:path";
 import { execSync } from "node:child_process";
 // compression handled by context-mode extension — memory.ts no longer imports compress.ts
 
+// Suppress Node.js SQLite ExperimentalWarning from context-mode's MCP bridge child process.
+// context-mode uses node:sqlite (built-in since Node 22.5), which emits this warning on first
+// import. The MCP bridge spawns server.bundle.mjs as a child and the warning leaks through.
+// Setting this before the bridge bootstraps ensures the child inherits a clean env.
+process.env.NODE_NO_WARNINGS = "1";
+
 // ============================================================
 // Config — 🛠️ Customize these paths for your setup
 // ============================================================
