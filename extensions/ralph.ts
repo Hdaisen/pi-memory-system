@@ -186,14 +186,50 @@ export default function (pi: ExtensionAPI) {
   // Commands
   // ============================================================
 
+  // Auto-run marker — when set, agent_end will auto-start ralph
+  // once a new tasks.md appears
+  function setAutoRun(cwd: string, description: string): void {
+    const file = path.join(cwd, ".ralph-autorun.json");
+    fs.writeFileSync(file, JSON.stringify({ description, createdAt: Date.now() }), "utf-8");
+  }
+  function clearAutoRun(cwd: string): void {
+    try { fs.unlinkSync(path.join(cwd, ".ralph-autorun.json")); } catch {}
+  }
+  function hasAutoRun(cwd: string): boolean {
+    try { return fs.existsSync(path.join(cwd, ".ralph-autorun.json")); } catch { return false; }
+  }
+
   pi.registerCommand("ralph", {
-    description: "Autonomous task execution loop. Usage: /ralph run [spec-name] | status | stop | resume",
+    description: "Autonomous task execution loop. Usage: /ralph do <description> | run | status | stop | resume",
     handler: async (args, ctx) => {
       const cwd = ctx.cwd;
       const parts = (args ?? "").trim().split(/\s+/);
       const subcmd = parts[0]?.toLowerCase() || "status";
 
       switch (subcmd) {
+
+        case "do": {
+          const description = parts.slice(1).join(" ");
+          if (!description) {
+            ctx.ui.notify("Usage: /ralph do <description of what to implement>", "warn");
+            return;
+          }
+
+          setAutoRun(cwd, description);
+          ctx.ui.notify(`Ralph: generating spec + tasks for: ${description}`, "info");
+
+          pi.sendUserMessage(
+            `📋 [Ralph] Generate a feature specification and task breakdown for:\n\n` +
+            `> ${description}\n\n` +
+            "Use **@ifi/pi-spec** to:\n" +
+            "1. Run `/spec:init` to initialize the spec workspace (if not already done)\n" +
+            "2. Run `/spec:specify` to create the feature spec based on the description above\n" +
+            "3. Run `/spec:tasks` to generate a structured tasks.md from the spec\n\n" +
+            "Once tasks.md is generated, ralph will **automatically start executing** the tasks.\n" +
+            "Make sure the tasks.md follows Ralph-compatible format with `[ ] T001` style checkboxes."
+          );
+          return;
+        }
 
         case "run": {
           // Find spec
@@ -328,7 +364,50 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_end", async (_event, ctx) => {
     const cwd = ctx.cwd;
     const session = getOrCreateSession(cwd);
-    if (!session || !session.active || session.stopped) return;
+
+    // Check for auto-run: tasks.md just created via /ralph do
+    if (!session || !session.active) {
+      if (hasAutoRun(cwd)) {
+        const specDir = findLatestSpec(cwd);
+        if (specDir) {
+          const tf = path.join(specDir, "tasks.md");
+          if (fs.existsSync(tf)) {
+            clearAutoRun(cwd);
+            ctx.ui.notify(`Ralph: tasks.md detected in ${path.basename(specDir)}, auto-starting...`, "info");
+
+            // Build session and start first task
+            const { pending, all } = parseTasks(tf);
+            if (pending.length > 0) {
+              const s: RalphSession = {
+                specDir,
+                tasksFile: tf,
+                stateFile: path.join(cwd, ".ralph-state.json"),
+                active: true,
+                lastTask: "",
+                completedCount: all.length - pending.length,
+                totalTasks: all.length,
+                stopped: false,
+              };
+              sessions.set(cwd, s);
+              saveState(s);
+              updateWidget(ctx, s);
+
+              const first = pending[0];
+              pi.sendUserMessage(
+                `🎯 [Ralph] Auto-starting execution. First task: **${first.id}**:\n\n` +
+                `\`\`\`\n${first.line}\n\`\`\`\n\n` +
+                "Full details in `" + tf + "`.\n" +
+                "Implement this task and mark it `[x]` when done."
+              );
+            }
+            return;
+          }
+        }
+      }
+      return;
+    }
+
+    if (session.stopped) return;
 
     // Re-read tasks.md to check if the dispatched task was completed
     const { pending, all } = parseTasks(session.tasksFile);
