@@ -778,9 +778,12 @@ export default function (pi: ExtensionAPI) {
     const lastMsg = messages[messages.length - 1];
     if (lastMsg && lastMsg.role !== "user") return;
 
-    // At user turn boundary: keep only system/developer (our injections)
+    // At user turn boundary: keep system/developer + current user message
+    // (old user/assistant/tool history is stripped — subagent essence covers it)
+    const lastUserIdx = messages.length - 1;
     const filtered = messages.filter(
-      (m: any) => m.role === "system" || m.role === "developer"
+      (_: any, i: number) =>
+        _.role === "system" || _.role === "developer" || i === lastUserIdx
     );
 
     // If nothing to trim, skip
