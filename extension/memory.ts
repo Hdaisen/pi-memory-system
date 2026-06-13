@@ -112,9 +112,7 @@ const KEEP_RECENT_TURNS = 3;
 let _refineSuppressed = false;
 let _userMessageCount = 0;
 
-// 🟢 When true, next before_agent_start injects full memory index + linked memories.
-//    Set on first turn and after each context trim, cleared after injection.
-let _needsFullInjection = true;
+// (removed: layered injection — always inject full context)
 
 /**
  * Compute the context refinement status for display.
@@ -642,7 +640,6 @@ export default function (pi: ExtensionAPI) {
   // ============================================================
   pi.on("session_start", async (_event, ctx) => {
     _refineSuppressed = false;
-    _needsFullInjection = true;
     ctx.ui.setStatus("refine", "🧠 Trim: 0/3");
     updateTaskWidget(ctx.cwd, ctx);
   });
@@ -678,26 +675,19 @@ export default function (pi: ExtensionAPI) {
       if (globalIndex) indexSection += `### Global Memory\n\n${globalIndex.replace(/^# Memory Index\n*/, "")}\n`;
     }
 
-    // 5. Build linked memories (full injection only)
+    // 5. Build linked memories from notebook [[Wiki-links]]
     let linkedSection = "";
-    if (_needsFullInjection) {
-      const links = notebookContent ? extractLinks(notebookContent) : [];
-      const userKeywords = event.prompt ? [event.prompt] : [];
-      const linkedContent = readLinkedContent(links, cwd, userKeywords);
-      if (linkedContent.length > 0) {
-        linkedSection = "\n\n---\n\n## Related Memories\n" + linkedContent.join("\n\n");
-      }
+    const links = notebookContent ? extractLinks(notebookContent) : [];
+    const userKeywords = event.prompt ? [event.prompt] : [];
+    const linkedContent = readLinkedContent(links, cwd, userKeywords);
+    if (linkedContent.length > 0) {
+      linkedSection = "\n\n---\n\n## Related Memories\n" + linkedContent.join("\n\n");
     }
 
-    // 6. Build final memory context
+    // 6. Build full memory context — always inject complete context
     let memoryContext = `${coreSection}\n`;
     if (rules) memoryContext += `\n${rules}\n`;
-    memoryContext += `\n---\n\n${notebookSection}`;
-
-    if (_needsFullInjection) {
-      memoryContext += `${indexSection}${linkedSection}`;
-      _needsFullInjection = false;
-    }
+    memoryContext += `\n---\n\n${notebookSection}${indexSection}${linkedSection}\n`;
 
     return {
       systemPrompt: event.systemPrompt + `\n\n${memoryContext}`,
@@ -769,7 +759,6 @@ export default function (pi: ExtensionAPI) {
 
     // Reset counter post-cleanup (only KEEP_RECENT_TURNS user turns remain)
     _userMessageCount = KEEP_RECENT_TURNS;
-    _needsFullInjection = true; // next turn gets full memory context to bridge the gap
     ctx.ui.setStatus("refine", `🧠 Trim: ✅ cleaned (kept ${KEEP_RECENT_TURNS} user turns)`);
     return { messages: filtered };
   });
