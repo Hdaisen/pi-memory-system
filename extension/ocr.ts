@@ -2,7 +2,7 @@
  * PaddleOCR Extension for Pi
  *
  * PP-OCRv6 OCR — extract text from images/PDFs.
- * Requires WSL2 with PaddleOCR installed (~/paddleocr-env or system).
+ * Requires WSL2 with PaddleOCR installed.
  *
  * Usage:
  *   /ocr <image_path>      — OCR an image, show results
@@ -10,12 +10,11 @@
  *
  * Tools available to the LLM:
  *   ocr_image     — Extract text from an image/PDF
- *   ocr_document  — Extract structured text (paragraphs) from document image
+ *   ocr_document  — Extract structured text paragraphs from document image
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-
-const WSL_CMD = `wsl bash -ic "export PATH=\\$HOME/.local/bin:\\$PATH && paddleocr-cli"`;
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { execSync } from "node:child_process";
 
 interface OCRData {
   texts: string[];
@@ -24,20 +23,14 @@ interface OCRData {
   det_scores?: number[];
 }
 
+function runPaddleOCR(path: string): OCRData[] {
+  const escaped = path.replace(/'/g, "'\\''");
+  const cmd = `wsl bash -ic "export PATH=\\$HOME/.local/bin:\\$PATH && paddleocr-cli '${escaped}'"`;
+  const stdout = execSync(cmd, { timeout: 60_000, encoding: "utf-8" });
+  return JSON.parse(stdout);
+}
+
 export default function ocrExtension(pi: ExtensionAPI) {
-  // Helper: run paddleocr-cli in WSL2
-  async function runPaddleOCR(path: string): Promise<OCRData[]> {
-    const escapedPath = path.replace(/'/g, "'\\''");
-    const result = await pi.runTool("bash", {
-      command: `wsl bash -ic "export PATH=\\$HOME/.local/bin:\\$PATH && paddleocr-cli '${escapedPath}'"`,
-      timeout: 60_000,
-    });
-
-    const stdout = typeof result === "string" ? result : (result as any).stdout;
-    const parsed: OCRData[] = JSON.parse(stdout);
-    return parsed;
-  }
-
   // Register /ocr command
   pi.registerCommand("ocr", {
     description: "OCR an image/PDF using PP-OCRv6. Usage: /ocr <image_path> [--simple]",
@@ -54,15 +47,8 @@ export default function ocrExtension(pi: ExtensionAPI) {
       ctx.ui.notify(`🧐 OCR: ${path}`, "info");
 
       try {
-        const result = await pi.runTool("bash", {
-          command: `wsl bash -ic "export PATH=\\$HOME/.local/bin:\\$PATH && paddleocr-cli '${path.replace(/'/g, "'\\''")}'"`,
-          timeout: 60_000,
-        });
-
-        const stdout = typeof result === "string" ? result : (result as any).stdout;
-        const parsed: OCRData[] = JSON.parse(stdout);
-
-        if (!parsed.length || !parsed[0].texts.length) {
+        const data = runPaddleOCR(path);
+        if (!data.length || !data[0].texts.length) {
           pi.sendMessage({
             role: "assistant",
             content: [{ type: "text", text: "⚠️ No text found in image." }],
@@ -70,9 +56,9 @@ export default function ocrExtension(pi: ExtensionAPI) {
           return;
         }
 
-        const data = parsed[0];
-        const lines = data.texts
-          .map((t: string, i: number) => `  [${(data.scores[i] * 100).toFixed(1)}%] ${t}`)
+        const d = data[0];
+        const lines = d.texts
+          .map((t: string, i: number) => `  [${(d.scores[i] * 100).toFixed(1)}%] ${t}`)
           .join("\n");
 
         if (simple) {
@@ -80,7 +66,7 @@ export default function ocrExtension(pi: ExtensionAPI) {
             role: "assistant",
             content: [{
               type: "text",
-              text: `**OCR** (${data.texts.length} regions):\n\`\`\`\n${data.texts.join("\n")}\n\`\`\``,
+              text: `**OCR** (${d.texts.length} regions):\n\`\`\`\n${d.texts.join("\n")}\n\`\`\``,
             }],
           });
         } else {
@@ -88,7 +74,7 @@ export default function ocrExtension(pi: ExtensionAPI) {
             role: "assistant",
             content: [{
               type: "text",
-              text: `**OCR** — ${data.texts.length} text regions\n\`\`\`\n${lines}\n\`\`\``,
+              text: `**OCR** — ${d.texts.length} text regions\n\`\`\`\n${lines}\n\`\`\``,
             }],
           });
         }
@@ -117,13 +103,10 @@ export default function ocrExtension(pi: ExtensionAPI) {
         },
       },
     },
-    handler: async ({ path }: { path: string }, _ctx) => {
+    handler: async ({ path }: { path: string }) => {
       try {
-        const data = await runPaddleOCR(path);
-        if (!data.length || !data[0].texts.length) {
-          return "No text found in image.";
-        }
-
+        const data = runPaddleOCR(path);
+        if (!data.length || !data[0].texts.length) return "No text found in image.";
         return data[0].texts
           .map((t: string, i: number) => `[${(data[0].scores[i] * 100).toFixed(1)}%] ${t}`)
           .join("\n");
@@ -149,14 +132,10 @@ export default function ocrExtension(pi: ExtensionAPI) {
         },
       },
     },
-    handler: async ({ path }: { path: string }, _ctx) => {
+    handler: async ({ path }: { path: string }) => {
       try {
-        const data = await runPaddleOCR(path);
-        if (!data.length || !data[0].texts.length) {
-          return "No text found.";
-        }
-
-        // Group into paragraphs (merge consecutive high-confidence lines)
+        const data = runPaddleOCR(path);
+        if (!data.length || !data[0].texts.length) return "No text found.";
         const paragraphs: string[] = [];
         let current = "";
         for (let i = 0; i < data[0].texts.length; i++) {
@@ -170,7 +149,6 @@ export default function ocrExtension(pi: ExtensionAPI) {
           }
         }
         if (current) paragraphs.push(current);
-
         return paragraphs.join("\n\n");
       } catch (e: any) {
         return `OCR failed: ${e?.message || e}`;
