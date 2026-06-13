@@ -578,6 +578,61 @@ function convertWithMarkitdown(filePath: string): string | null {
 }
 
 // ============================================================
+// Task Widget — render notebook tasks in Pi TUI
+// ============================================================
+
+/**
+ * Read the session notebook and render a task summary widget.
+ * Shows current task + pending todos in Pi's TUI below the editor.
+ */
+function updateTaskWidget(cwd: string, ctx: any): void {
+  const notebook = safeRead(PATHS.notebook(cwd));
+  if (!notebook) return;
+
+  const lines: string[] = [];
+
+  // 当前任务 section
+  const taskMatch = notebook.match(/^## 当前任务\n([\s\S]*?)(?=\n^## |\z)/m);
+  if (taskMatch) {
+    const taskLines = taskMatch[1].trim().split("\n").filter((l: string) => l.trim() && !l.startsWith(">"));
+    if (taskLines.length > 0) {
+      // Show first task item
+      const first = taskLines[0].replace(/^- /, "").trim();
+      if (first) {
+        lines.push(`📋 ${first.slice(0, 60)}`);
+      }
+    }
+  }
+
+  // 待办 section — count pending items
+  const todoMatch = notebook.match(/^## 待办\n([\s\S]*?)(?=\n^## |\z)/m);
+  if (todoMatch) {
+    const pending = todoMatch[1].split("\n").filter((l: string) => l.includes("[ ]"));
+    if (pending.length > 0) {
+      lines.push(`⏳ ${pending.length} pending`);
+      // Show first few pending items
+      for (const item of pending.slice(0, 3)) {
+        const text = item.replace(/^\s*- \[ \] /, "").trim();
+        if (text) lines.push(`  · ${text.slice(0, 45)}`);
+      }
+    }
+  }
+
+  // Key decisions — show active ones
+  const decMatch = notebook.match(/^## 关键决策\n([\s\S]*?)(?=\n^## |\z)/m);
+  if (decMatch) {
+    const decisions = decMatch[1].split("\n").filter((l: string) => l.trim().startsWith("-"));
+    if (decisions.length > 0 && lines.length < 6) {
+      lines.push(`💡 ${decisions.length} active decisions`);
+    }
+  }
+
+  if (lines.length > 0) {
+    ctx.ui.setWidget("notebook-tasks", lines);
+  }
+}
+
+// ============================================================
 // Extension — register hooks & tools
 // ============================================================
 
@@ -589,6 +644,7 @@ export default function (pi: ExtensionAPI) {
     _refineSuppressed = false;
     _needsFullInjection = true;
     ctx.ui.setStatus("refine", "🧠 Trim: 0/3");
+    updateTaskWidget(ctx.cwd, ctx);
   });
 
   // ============================================================
@@ -723,6 +779,7 @@ export default function (pi: ExtensionAPI) {
   // ============================================================
   pi.on("agent_end", async (_event, ctx) => {
     ctx.ui.setStatus("refine", getRefineStatus());
+    updateTaskWidget(ctx.cwd, ctx);
   });
 
   // ============================================================
@@ -897,6 +954,7 @@ ${params.content}${relatedLine}
             `$1${noteLine}`,
           );
           fs.writeFileSync(notebookPath, updated, "utf-8");
+          updateTaskWidget(cwd, ctx);
         }
       }
 
@@ -1324,6 +1382,7 @@ ${params.content}${relatedLine}
         }
 
         fs.writeFileSync(notebookPath, updated, "utf-8");
+        updateTaskWidget(cwd, ctx);
         return {
           content: [
             {
