@@ -63,7 +63,10 @@ export default function ocrExtension(pi: ExtensionAPI) {
         const parsed: OCRData[] = JSON.parse(stdout);
 
         if (!parsed.length || !parsed[0].texts.length) {
-          ctx.reply("⚠️ No text found in image.");
+          pi.sendMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "⚠️ No text found in image." }],
+          });
           return;
         }
 
@@ -73,12 +76,27 @@ export default function ocrExtension(pi: ExtensionAPI) {
           .join("\n");
 
         if (simple) {
-          ctx.reply(`**OCR** (${data.texts.length} regions):\n\`\`\`\n${data.texts.join("\n")}\n\`\`\``);
+          pi.sendMessage({
+            role: "assistant",
+            content: [{
+              type: "text",
+              text: `**OCR** (${data.texts.length} regions):\n\`\`\`\n${data.texts.join("\n")}\n\`\`\``,
+            }],
+          });
         } else {
-          ctx.reply(`**OCR** — ${data.texts.length} text regions\n\`\`\`\n${lines}\n\`\`\``);
+          pi.sendMessage({
+            role: "assistant",
+            content: [{
+              type: "text",
+              text: `**OCR** — ${data.texts.length} text regions\n\`\`\`\n${lines}\n\`\`\``,
+            }],
+          });
         }
       } catch (e: any) {
-        ctx.reply(`❌ OCR failed: ${e?.message || e}`);
+        pi.sendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: `❌ OCR failed: ${e?.message || e}` }],
+        });
       }
     },
   });
