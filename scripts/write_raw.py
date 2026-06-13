@@ -327,18 +327,23 @@ def load_messages_from_json(path: str) -> list[dict]:
 def process_with_paths(input_path: str, output_path: str, raw_dir: str) -> Optional[str]:
     """
     主处理流程（显式传路径版）。
-    支持 .json 和 .jsonl 输入。
+    支持 .json 和 .jsonl 输入。input_path 为 "-" 时从 stdin 读取。
     """
-    if not os.path.exists(input_path):
-        print(f"[write_raw] Input not found: {input_path}", file=sys.stderr)
-        return None
-
     ensure_dir(raw_dir)
 
+    # 从 stdin 读取
+    if input_path == "-":
+        sys.stdin.reconfigure(encoding="utf-8")
+        messages = json.loads(sys.stdin.read())
+        if not isinstance(messages, list):
+            messages = [messages]
     # 根据扩展名选择加载方式
-    if input_path.endswith(".jsonl"):
+    elif input_path.endswith(".jsonl"):
         messages = load_messages_from_jsonl(input_path)
     else:
+        if not os.path.exists(input_path):
+            print(f"[write_raw] Input not found: {input_path}", file=sys.stderr)
+            return None
         messages = load_messages_from_json(input_path)
 
     if not isinstance(messages, list) or len(messages) == 0:
@@ -378,7 +383,7 @@ def process(cwd: str) -> Optional[str]:
 
 def main():
     parser = argparse.ArgumentParser(description="Pi AgentMessage → raw.md 格式化引擎")
-    parser.add_argument("--input", required=True, help="输入文件路径（.json 或 .jsonl）")
+    parser.add_argument("--input", required=True, help="输入：文件路径(.json/.jsonl) 或 -（stdin 管道）")
     parser.add_argument("--output", required=True, help="raw.md 输出路径")
     parser.add_argument("--raw-dir", required=True, help="截断文件存放目录 (turns/raw/)")
     args = parser.parse_args()

@@ -854,7 +854,7 @@ export default function (pi: ExtensionAPI) {
   // session_start
   // ============================================================
   pi.on("session_start", async (_event, ctx) => {
-    ctx.ui.setStatus("memory", "🧠 Memory: idle");
+    ctx.ui.setStatus("memory", "🧠 🟢");
     updateTaskWidget(ctx.cwd, ctx);
   });
 
@@ -927,12 +927,12 @@ export default function (pi: ExtensionAPI) {
     // If nothing to trim, skip
     if (filtered.length === messages.length) return;
 
-    ctx.ui.setStatus("memory", "🧠 Memory: history stripped");
+    ctx.ui.setStatus("memory", "🧠 🟡");
     return { messages: filtered };
   });
 
   // ============================================================
-  // agent_end: write raw.md + spawn subagent
+  // agent_end: pipe messages to Python → spawn subagent
   // ============================================================
   pi.on("agent_end", async (_event, ctx) => {
     const cwd = ctx.cwd;
@@ -942,38 +942,41 @@ export default function (pi: ExtensionAPI) {
 
     const messages = (_event as any)?.messages;
     if (messages && Array.isArray(messages)) {
-      // 1. 写 messages.json
       const turnsDir = PATHS.turnsDir(cwd);
       const rawDir = path.join(turnsDir, "raw");
       fs.mkdirSync(rawDir, { recursive: true });
-      const jsonPath = path.join(rawDir, "messages.json");
-      fs.writeFileSync(jsonPath, JSON.stringify(messages, null, 2), "utf-8");
 
-      // 2. 调 Python 脚本生成 raw.md
-      ctx.ui.setStatus("memory", "🧠 Memory: formatting...");
+      // 管道传 JSON 给 Python 脚本，不写中间文件
+      ctx.ui.setStatus("memory", "🧠 🟡");
       const scriptPath = path.join(HOME, ".pi", "agent", "scripts", "write_raw.py");
       const outputPath = path.join(turnsDir, "raw.md");
+      const jsonInput = JSON.stringify(messages);
       const pythonCmd = [
         `python3`,
         `"${scriptPath}"`,
-        `--input "${jsonPath}"`,
+        `--input -`,
         `--output "${outputPath}"`,
         `--raw-dir "${rawDir}"`
       ].join(" ");
       try {
-        execSync(pythonCmd, { cwd, timeout: 30000, stdio: "pipe" });
+        execSync(pythonCmd, {
+          cwd,
+          timeout: 30000,
+          stdio: ["pipe", "pipe", "pipe"],
+          input: jsonInput
+        });
       } catch (e) {
         console.warn("[memory] write_raw.py failed:", e);
       }
 
-      // 3. 启动子代理
-      ctx.ui.setStatus("memory", "🧠 Memory: extracting...");
+      // 启动子代理
+      ctx.ui.setStatus("memory", "🧠 🟡");
       try {
         spawnSubagent(cwd);
-        ctx.ui.setStatus("memory", "🧠 Memory: ready");
+        ctx.ui.setStatus("memory", "🧠 🟢");
       } catch (e) {
         console.warn("[memory] Subagent extraction failed:", e);
-        ctx.ui.setStatus("memory", "🧠 Memory: ⚠️ error");
+        ctx.ui.setStatus("memory", "🧠 🔴");
       }
     }
 
