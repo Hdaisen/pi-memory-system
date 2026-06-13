@@ -29,41 +29,73 @@
 
 > **"Brains are for thinking, not for remembering."**
 >
-> Only the last 3 turns are kept per LLM call. Old messages are filtered — but their value has been distilled into memory files. This is by design.
+> The main LLM never sees raw conversation history. A dedicated subagent (memory-extractor) processes each turn's conversation into curated essence + long-term memory. This is the **cerebellum** doing the walking while the **cortex** does the thinking.
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────┐
+│                   User sends message              │
+└────────────────────┬─────────────────────────────┘
+                     ↓
+┌──────────────────────────────────────────────────┐
+│  before_agent_start (extension)                   │
+│  ├─ Inject core-prompt + rules                   │
+│  ├─ Inject notebook.md (subagent-maintained)     │
+│  ├─ Inject essence.md (last turn's handoff)      │
+│  └─ Inject linked memories via [[Wiki-links]]     │
+└────────────────────┬─────────────────────────────┘
+                     ↓
+┌──────────────────────────────────────────────────┐
+│  context (extension)                              │
+│  └─ Strip all history except system + current msg │
+└────────────────────┬─────────────────────────────┘
+                     ↓
+┌──────────────────────────────────────────────────┐
+│  Main LLM thinks & replies (no memory maintenance)│
+└────────────────────┬─────────────────────────────┘
+                     ↓
+┌──────────────────────────────────────────────────┐
+│  agent_end (extension → Python → subagent)        │
+│                                                    │
+│  1. Dump messages → python3 run_extraction.py     │
+│     ├─ Format → turns/raw.md (filter system/read) │
+│     └─ Spawn pi -p (memory-extractor)             │
+│        ├─ Write essence.md (next turn's handoff)  │
+│        ├─ Update notebook.md                      │
+│        └─ Call remember() for long-term memory    │
+│  2. Status: 🧠 🟢 / 🟡 / 🔴                       │
+└──────────────────────────────────────────────────┘
+```
 
 ### Three-Layer Architecture
 
-| Layer | File | Purpose |
-|:------|:-----|:---------|
-| 🏛️ **Core Prompt** | `~/.pi/agent/memory/core-prompt.md` | Identity, principles, behavior framework |
-| 📓 **Session Notebook** | `~/.pi/agent/memory/projects/<name>/notebook.md` (per project) | Current tasks, progress, active context |
-| 🗄️ **Long-term Memory** | `~/.pi/agent/memory/projects/<name>/memories/` (project)<br>`~/.pi/agent/memory/personal/` (global) | Facts, preferences, decisions, events |
+| Layer | File | Maintainer |
+|:------|:-----|:-----------|
+| 🏛️ **Core Prompt** | `~/.pi/agent/memory/core-prompt.md` | Extension (auto) |
+| 📓 **Session Notebook** | `~/.pi/agent/memory/projects/<name>/notebook.md` | Subagent (auto) |
+| 🗄️ **Long-term Memory** | `~/.pi/agent/memory/projects/<name>/memories/` (project)<br>`~/.pi/agent/memory/personal/` (global) | Subagent via `remember` |
 
-## Workflow
+### Key Design: Subagent Distillation
 
-```
-User sends a message
-    ↓
-before_agent_start ── auto-inject:
-  ├─ Core prompt (who you are + memory protocol)
-  ├─ Session notebook (current tasks + context)
-  └─ [[Wiki-links]] selectively load related memories
-    ↓
-context ── triggers before every LLM call:
-  └─ Refine: only on new user messages
-     Keep last 3 turns + all system messages
-     Old messages → key info already in memory
-    ↓
-LLM thinks & replies (with confidence annotations)
-    ↓
-agent_end ── auto-distill:
-  ├─ Update notebook (progress, new decisions)
-  ├─ Write to long-term memory (project / global)
-  ├─ Annotate confidence / trigger / falsification conditions
-  └─ Update core prompt (if identity changed)
-```
+The main LLM **never** performs memory maintenance. After each turn:
 
-## Tools (8)
+1. **Extension** (TypeScript): dumps the raw conversation to `turns/raw/messages.json`
+2. **Python script** (`run_extraction.py`): filters noise (system prompts, read results), formats to Markdown, saves to `turns/raw.md`
+3. **Subagent** (spawned Pi process): reads `raw.md`, writes `essence.md` (next turn handoff), updates `notebook.md`, calls `remember()` for long-term storage
+
+This mimics the brain's sleep consolidation — the hippocampus (subagent) replays and consolidates while the cortex (main LLM) rests.
+
+### Context Strategy
+
+The main LLM receives **zero raw conversation history**. Each turn:
+- `essence.md` (~500B) — curated handoff from last turn
+- `notebook.md` (~500B) — session state
+- Core prompt + rules + linked memories
+
+Everything else is stripped by the `context` event handler (mid-turn safe).
+
+## Tools (6)
 
 | Tool | Description |
 |:-----|:-------------|
@@ -73,16 +105,6 @@ agent_end ── auto-distill:
 | `🗑️ forget` | ⚠️ Delete. Prefer supersede. |
 | `📓 notebook` | View/update the session notebook |
 | `📊 memory_status` | View memory file status overview |
-| `📄 convert_file` | Convert binary files (PDF/DOCX/XLSX) to Markdown (requires WSL + MarkItDown) |
-| `📦 ccr_retrieve` | Recover original content after auto-compression |
-
-## Auto Features
-
-| Feature | Trigger | Description |
-|:--------|:--------|:-------------|
-| 🔄 Binary → Markdown | When `read` fails | PDF/DOCX/PPTX/XLSX auto-converted to Markdown |
-| 📦 Content compression | When `bash` output >2KB | JSON arrays / search results / repeated logs → compact format + CCR cache |
-| 🔙 Original retrieval | LLM calls `ccr_retrieve` | Recover full content via `<<ccr:hash>>` markers |
 
 ## Quick Start
 
@@ -90,95 +112,44 @@ agent_end ── auto-distill:
 
 - [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent) v0.79+
 - Node.js 18+
+- Python 3 (for `run_extraction.py`)
 
-### One-Click Init
+### Install
 
-#### Windows (PowerShell)
-```powershell
-git clone https://github.com/Hdaisen/pi-memory-system.git
-cd C:\YourProject
-C:\path\to\pi-memory-system\scripts\init.ps1
-# Or: init.ps1 -ProjectDir "C:\MyProject"
-```
-
-#### macOS / Linux
 ```bash
+# Clone this repo
 git clone https://github.com/Hdaisen/pi-memory-system.git
-cd /path/to/your/project
-bash /path/to/pi-memory-system/scripts/init.sh
-# Or: init.sh /path/to/your/project
+
+# Copy extension
+cp pi-memory-system/extensions/memory.ts ~/.pi/agent/extensions/memory.ts
+
+# Copy scripts
+cp pi-memory-system/scripts/*.py ~/.pi/agent/scripts/
+
+# Copy subagent definition
+mkdir -p ~/.pi/agent/agents
+cp pi-memory-system/agents/memory-extractor.md ~/.pi/agent/agents/
+
+# Copy core prompt
+cp pi-memory-system/core-prompt.md ~/.pi/agent/memory/core-prompt.md
+cp pi-memory-system/rules.md ~/.pi/agent/memory/rules.md
 ```
 
-### Manual Install
-
-**1. Install extension files**
-```bash
-cp extension/memory.ts ~/.pi/agent/extensions/memory.ts
-cp extension/compress.ts ~/.pi/agent/extensions/compress.ts
-```
-
-**2. Create global memory**
-```
-~/.pi/agent/memory/
-├── core-prompt.md          # Copy templates/core-prompt.md and customize
-└── personal/
-    ├── facts.md
-    ├── preferences.md
-    ├── decisions.md
-    └── events.md
-```
-
-**3. Project initialization**
-```
-your-project/~/.pi/agent/memory/projects/<name>/
-├── notebook.md             # Copy templates/notebook.md
-└── memories/
-    ├── _index.md
-    ├── facts.md
-    ├── preferences.md
-    ├── decisions.md
-    └── events.md
-```
-
-### Core Prompt Configuration
-
-Edit `~/.pi/agent/memory/core-prompt.md`:
-```markdown
-## Identity
-- **I am**: [Your AI name], [character description]
-- **User**: [Your name], my partner
-- **Core Belief**: "Brains are for thinking, not for remembering."
-```
-
-> ⚠️ Once written, the system runs automatically. Restart Pi or run `/reload`.
-
-### Optional Dependencies
-
-| Feature | Dependency | Install |
-|:--------|:-----------|:--------|
-| Binary → Markdown | WSL + `markitdown` (Python) | `python3 -m venv ~/.markitdown-venv && ~/.markitdown-venv/bin/pip install 'markitdown[pdf]'` |
-| Content compression | None (pure TypeScript, zero deps) | Built-in |
+Then restart Pi or run `/reload`.
 
 ## Design Principles
 
-### Why Markdown + [[Wiki-links]]?
+### Why Subagents?
 
-- LLMs natively speak Markdown — zero format conversion
-- **JSON is the wrong direction** — LLMs struggle with exact commas and quotes
-- **Obsidian compatible**: visualize your memory knowledge graph
-- [[Wiki-links]] mimic the brain's associative network, not rigid tree hierarchies
+- **Main LLM** = prefrontal cortex: focuses on the current problem
+- **Subagent** = hippocampus: consolidates memories in the background
+- **Extension** = brain stem: handles routine mechanical tasks
 
-### Why Three Layers?
-
-| Layer | Change Frequency | Content | Strategy |
-|:------|:-----------------|:--------|:---------|
-| Core Prompt | Almost never | Identity, principles | Manual |
-| Notebook | Every conversation | Tasks, context | Auto-update |
-| Long-term Memory | Gradual accumulation | Knowledge, decisions | Chunked storage |
+The main LLM never thinks about "what should I remember" — it's all automatic.
 
 ### Confidence Tags
 
-Prevent the LLM from disguising speculation as fact — every decision and event entry must be tagged:
+Same as before — every decision and event entry must be tagged:
 
 | Tag | Meaning |
 |:----|:--------|
@@ -186,22 +157,11 @@ Prevent the LLM from disguising speculation as fact — every decision and event
 | `[inferred]` | Logical deduction, not directly verified |
 | `[intuition]` | Gut feeling, no direct evidence |
 
-### Falsification Conditions
-
-- **Empirical decisions** (based on facts/experiments) → must declare: what evidence would overturn this?
-- **Preference decisions** (subjective/pragmatic) → optional, but record tradeoffs and alternatives
-
-### Supersede — Preserve the Correction Chain
-
-- **Semantic corrections** (wrong reasoning, changed conclusions) → mark old entry `↗ Superseded by [[new entry]]`, append new entry
-- **Non-semantic fixes** (typos, dead links) → edit directly
-- **forget only for**: test data, duplicate entries, obvious noise
-
 ### Chunked Storage
 
 ```
 memories/
-├── _index.md              ← Auto-generated index
+├── _index.md              ← Auto-generated index (refreshed per turn)
 ├── facts.md
 ├── preferences.md
 ├── decisions/
@@ -214,9 +174,6 @@ memories/
     └── design.md
 ```
 
-- Use `remember`'s `file` parameter to specify chunk
-- New topic with no match → LLM proposes filename, user confirms
-
 ### Memory Scoping
 
 | Scope | Location | Judgement |
@@ -224,40 +181,21 @@ memories/
 | `project` | `~/.pi/agent/memory/projects/<name>/memories/` | Only useful in this project |
 | `global` | `~/.pi/agent/memory/personal/` | Still useful in other projects |
 
-One piece of information can be stored in both scopes simultaneously.
-
-## Acknowledgements
-
-Deeply inspired by **[Epistemic Trace](https://github.com/yumenana/epistemic-trace)** — specifically its concepts of **cognitive tracing**, **confidence tagging**, and **falsification conditions**. These ideas directly shaped this system's design and evolution.
-
-Key distinctions we made:
-
-- ❌ No L0/L1 compression (LLM compression risks confirmation bias)
-- ❌ No standalone failures.md (event tagging is more flexible)
-- ✅ Optional falsification conditions, separate empirical from preference decisions
-- ✅ Coding-specific trigger types (debugging, code-review, refactoring)
-
-**Our deepest gratitude to the Epistemic Trace project.** 🙌
-
-## Extension Development
-
-This system is built 100% with Pi's Extension API. See `extension/memory.ts` for reference:
-
-- `pi.on("before_agent_start", ...)` — inject context
-- `pi.on("context", ...)` — context refinement strategy (with mid-turn protection)
-- `pi.registerTool(...)` — register tools
-- `pi.on("agent_end", ...)` — post-processing
-
 ## Project Structure
 
 ```
 pi-memory-system/
-├── extension/
-│   ├── memory.ts            # Core Pi extension
-│   └── compress.ts          # Content compression module (imported by memory.ts)
+├── extensions/
+│   └── memory.ts            # Core Pi extension (hooks + tools)
+├── agents/
+│   └── memory-extractor.md  # Subagent definition
+├── scripts/
+│   ├── run_extraction.py    # Main pipeline (format + subagent launch)
+│   └── write_raw.py         # JSON→MD formatter (stdin/file/JSONL)
 ├── templates/               # Template files
 ├── example/                 # Example project
-├── scripts/                 # Setup scripts
+├── core-prompt.md           # Reference core prompt
+├── rules.md                 # Behavioral rules
 ├── LICENSE                  # MIT
 ├── README.md                # English documentation
 └── README.zh-CN.md          # Chinese documentation
