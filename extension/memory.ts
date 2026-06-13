@@ -528,6 +528,80 @@ function getMemoryStatus(cwd: string): string {
   return summary;
 }
 
+/**
+ * Ensure a project\'s memory directory and notebook exist.
+ * Creates them with default template if missing.
+ */
+function ensureProjectDir(cwd: string): void {
+  const dir = PATHS.projectDir(cwd);
+  if (fs.existsSync(dir)) return;
+
+  // Create project directory and memories subdirectory
+  fs.mkdirSync(PATHS.memoriesDir(cwd), { recursive: true });
+
+  // Create notebook.md with template
+  const notebookPath = PATHS.notebook(cwd);
+  const projectName = getProjectName(cwd);
+  const template = `# ${projectName} — Session Notebook
+
+## \u5f53\u524d\u4efb\u52a1
+\uff08\u5f53\u524d\u6b63\u5728\u505a\u4ec0\u4e48\uff09
+
+## Active Context
+\uff08\u672c\u6b21\u5bf9\u8bdd\u7684\u6d3b\u8dc3\u4e0a\u4e0b\u6587\uff09
+
+## \u5173\u952e\u51b3\u7b56
+- \uff08\u91cd\u8981\u51b3\u7b56\u8bb0\u5f55\u5728\u8fd9\u91cc\uff09
+
+## \u5f85\u529e
+- [ ] \uff08\u5f85\u529e\u4e8b\u9879\uff09
+
+---
+_Notebook \u7531\u8bb0\u5fc6\u7cfb\u7edf\u81ea\u52a8\u7ef4\u62a4\u3002_
+`;
+  fs.writeFileSync(notebookPath, template, "utf-8");
+}
+
+/**
+ * Create a WSL symlink from ~/.pi/agent/memory to the Windows path
+ * when the WSL username differs from the Windows username.
+ * This ensures bash commands (which run in WSL) can find memory files.
+ */
+function ensureWslSymlink(): void {
+  try {
+    // Check if WSL is available
+    const wslCheck = execSync("where wsl.exe", { encoding: "utf8", timeout: 3000, stdio: ["pipe", "pipe", "ignore"] });
+    if (!wslCheck.trim()) return;
+
+    // Get WSL username
+    const wslUser = execSync("wsl.exe whoami", { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "ignore"] }).trim();
+    const winUser = process.env.USERNAME || "";
+    if (!wslUser || !winUser) return;
+    if (wslUser === winUser) return; // Usernames match, no symlink needed
+
+    // Paths
+    const winMemoryPath = `/mnt/c/Users/${winUser}/.pi/agent/memory`;
+    const wslMemoryPath = `/home/${wslUser}/.pi/agent/memory`;
+
+    // Check if symlink already exists and points to correct target
+    const existing = execSync(
+      `wsl.exe -e bash -c 'readlink "${wslMemoryPath}" 2>/dev/null || echo "NOT_LINK"'`,
+      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "ignore"] }
+    ).trim();
+    if (existing === winMemoryPath) return; // Already correct
+
+    // Create parent dir and symlink
+    execSync(
+      `wsl.exe -e bash -c 'mkdir -p /home/${wslUser}/.pi/agent && ln -sf "${winMemoryPath}" "${wslMemoryPath}"'`,
+      { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "ignore"] }
+    );
+    console.log(`[memory] Created WSL symlink: ${wslMemoryPath} \u2192 ${winMemoryPath}`);
+  } catch (e) {
+    // WSL not available or command failed \u2014 not critical
+    console.warn("[memory] WSL symlink creation skipped:", e);
+  }
+}
+
 // content summary generation removed — dedup handled by context-mode
 
 // ============================================================
@@ -635,6 +709,9 @@ function updateTaskWidget(cwd: string, ctx: any): void {
 // ============================================================
 
 export default function (pi: ExtensionAPI) {
+  // Create WSL symlink at startup if Windows/WSL usernames differ
+  ensureWslSymlink();
+
   // ============================================================
   // session_start
   // ============================================================
@@ -650,7 +727,10 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     const cwd = ctx.cwd;
 
-    // 0. Refresh _index.md for both scopes
+    // 0. Ensure project directory and notebook exist
+    ensureProjectDir(cwd);
+
+    // 1. Refresh _index.md for both scopes
     refreshIndex(cwd, "project");
     refreshIndex(cwd, "global");
 
