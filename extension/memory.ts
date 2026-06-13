@@ -18,9 +18,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as crypto from "node:crypto";
 import { execSync } from "node:child_process";
-import { compressContent, ccrStore, getCcrStats } from "./compress";
+// compression handled by context-mode extension — memory.ts no longer imports compress.ts
 
 // ============================================================
 // Config — 🛠️ Customize these paths for your setup
@@ -106,6 +105,10 @@ const KEEP_RECENT_TURNS = 3;
 //    Set via /rec command. Reset automatically after one suppression.
 let _refineSuppressed = false;
 let _userMessageCount = 0;
+
+// 🟢 When true, next before_agent_start injects full memory index + linked memories.
+//    Set on first turn and after each context trim, cleared after injection.
+let _needsFullInjection = true;
 
 /**
  * Compute the context refinement status for display.
@@ -521,48 +524,7 @@ function getMemoryStatus(cwd: string): string {
   return summary;
 }
 
-/**
- * Generate a brief human-readable summary of tool result content.
- * Used in dedup markers to help the LLM decide if retrieval is needed.
- */
-function generateContentSummary(text: string): string {
-  const lines = text.split("\n");
-  const totalLines = lines.length;
-  const size = text.length;
-
-  // Extract the first meaningful line (skip empty lines, dashes, comments)
-  let firstLine = "";
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed && !trimmed.startsWith("//") && !trimmed.startsWith("#") && trimmed !== "---") {
-      firstLine = trimmed.slice(0, 100);
-      break;
-    }
-  }
-
-  // Detect content type from patterns
-  let typeHint = "";
-  const totalText = text.slice(0, 500).toLowerCase();
-  if (totalText.includes("import ") || totalText.includes(": string") || totalText.includes("interface ")) {
-    typeHint = "TypeScript source";
-  } else if (totalText.includes("| 层级 |") || totalText.startsWith("# ")) {
-    typeHint = "Markdown document";
-  } else if (firstLine.match(/^[\w\/\\\.-]+:\d+:/)) {
-    typeHint = "Search results";
-  } else if (totalText.startsWith("[")) {
-    typeHint = "JSON data";
-  } else if (totalText.includes("total") && totalText.includes("commit")) {
-    typeHint = "Git output";
-  }
-
-  const parts: string[] = [];
-  if (typeHint) parts.push(typeHint);
-  parts.push(`${totalLines} lines`);
-  parts.push(`${(size / 1024).toFixed(1)}KB`);
-  if (firstLine) parts.push(`"${firstLine}"`);
-
-  return parts.join(", ");
-}
+// content summary generation removed — dedup handled by context-mode
 
 // ============================================================
 // MarkItDown helper
@@ -619,6 +581,7 @@ export default function (pi: ExtensionAPI) {
   // ============================================================
   pi.on("session_start", async (_event, ctx) => {
     _refineSuppressed = false;
+    _needsFullInjection = true;
     ctx.ui.setStatus("refine", "🧠 Trim: 0/3");
   });
 
@@ -653,28 +616,27 @@ export default function (pi: ExtensionAPI) {
       if (globalIndex) indexSection += `### Global Memory\n\n${globalIndex.replace(/^# Memory Index\n*/, "")}\n`;
     }
 
-    // 4. Resolve [[Wiki-links]] from notebook
-    const links = notebookContent ? extractLinks(notebookContent) : [];
-    const userKeywords = event.prompt ? [event.prompt] : [];
-    const linkedContent = readLinkedContent(links, cwd, userKeywords);
+    // 5. Build linked memories (full injection only)
+    let linkedSection = "";
+    if (_needsFullInjection) {
+      const links = notebookContent ? extractLinks(notebookContent) : [];
+      const userKeywords = event.prompt ? [event.prompt] : [];
+      const linkedContent = readLinkedContent(links, cwd, userKeywords);
+      if (linkedContent.length > 0) {
+        linkedSection = "\n\n---\n\n## Related Memories\n" + linkedContent.join("\n\n");
+      }
+    }
 
-    // 5. Assemble memory context (rules injected right after core prompt)
+    // 6. Build final memory context
     let memoryContext = `${coreSection}\n`;
     if (rules) memoryContext += `\n${rules}\n`;
-    memoryContext += `\n---\n\n${notebookSection}${indexSection}\n`;
+    memoryContext += `\n---\n\n${notebookSection}`;
 
-    if (linkedContent.length > 0) {
-      memoryContext += "\n\n---\n\n## Related Memories\n";
-      memoryContext += linkedContent.join("\n\n");
+    if (_needsFullInjection) {
+      memoryContext += `${indexSection}${linkedSection}`;
+      _needsFullInjection = false;
     }
 
-    // Compression guidelines (appended to system prompt)
-    const ccrStat = getCcrStats();
-    if (ccrStat.size > 0) {
-      memoryContext += `\n\n---\n\n## Active Compression Cache\n- ${ccrStat.size} items in CCR store\n- Use \`ccr_retrieve({ hash })\` to recover any compressed content.\n`;
-    }
-
-    // 6. Inject into system prompt
     return {
       systemPrompt: event.systemPrompt + `\n\n${memoryContext}`,
     };
@@ -745,46 +707,8 @@ export default function (pi: ExtensionAPI) {
 
     // Reset counter post-cleanup (only KEEP_RECENT_TURNS user turns remain)
     _userMessageCount = KEEP_RECENT_TURNS;
-    ctx.ui.setStatus("refine", `🧠 Trim: ✅ cleaned (/trim to force)`);
-    // Dedup pass: collapse identical tool results within the 3-turn window
-    let dedupCount = 0;
-    const seenHashes = new Set<string>();
-    for (let i = 0; i < filtered.length; i++) {
-      const m = filtered[i];
-      if (m.role !== "tool") continue;
-
-      // Extract text from tool result
-      let text = "";
-      if (typeof m.content === "string") {
-        text = m.content;
-      } else if (Array.isArray(m.content)) {
-        text = m.content.map((c: { text?: string }) => c.text || "").join("\n");
-      }
-      if (!text || text.length < 200) continue;
-
-      const hash = crypto.createHash("sha256").update(text).digest("hex");
-
-      if (seenHashes.has(hash)) {
-        const storeKey = `dedup:${hash}`;
-        ccrStore.put(storeKey, text);
-        // Replace with a descriptive dedup marker
-        const summary = generateContentSummary(text);
-        const markerText = `[Deduplicated — ${summary}]\n<<ccr:${storeKey}>>`;
-        const newContent = Array.isArray(m.content)
-          ? [{ type: "text" as const, text: markerText }]
-          : markerText;
-        filtered[i] = { ...m, content: newContent };
-        dedupCount++;
-      } else {
-        seenHashes.add(hash);
-      }
-    }
-
-    // Reset counter post-cleanup (only KEEP_RECENT_TURNS user turns remain)
-    _userMessageCount = KEEP_RECENT_TURNS;
-    let statusText = `🧠 Trim: ✅ cleaned (kept ${KEEP_RECENT_TURNS} user turns)`;
-    if (dedupCount > 0) statusText += `, ${dedupCount} deduped`;
-    ctx.ui.setStatus("refine", statusText);
+    _needsFullInjection = true; // next turn gets full memory context to bridge the gap
+    ctx.ui.setStatus("refine", `🧠 Trim: ✅ cleaned (kept ${KEEP_RECENT_TURNS} user turns)`);
     return { messages: filtered };
   });
 
@@ -819,25 +743,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    // Content compression: compress bash tool outputs
-    if (event.toolName === "bash" && !event.isError) {
-      const outputText = (event.content?.[0] as { text?: string } | undefined)?.text;
-      if (outputText && outputText.length > 2048) {
-        const result = compressContent(outputText);
-        if (result) {
-          return {
-            content: [{ type: "text", text: result.compressed }],
-            details: {
-              compressed: true,
-              contentType: result.contentType,
-              ccrHash: result.hash,
-              stats: result.stats,
-            },
-            isError: false,
-          };
-        }
-      }
-    }
+    // Content compression handled by context-mode extension — removed from memory.ts
   });
 
   // ============================================================
@@ -1451,54 +1357,6 @@ ${params.content}${relatedLine}
       return {
         content: [{ type: "text", text: status }],
         details: {},
-      };
-    },
-  });
-
-  // ============================================================
-  // Tool: convert_file — convert binary files to Markdown via MarkItDown
-  // ============================================================
-  // ============================================================
-  // Tool: ccr_retrieve — get original content after compression
-  // ============================================================
-  pi.registerTool({
-    name: "ccr_retrieve",
-    label: "📦 Retrieve Original",
-    description:
-      "Retrieve the full original content that was automatically compressed " +
-      "to save context tokens. Call this when you need un-truncated data " +
-      "from a compressed tool output (identified by <<ccr:HASH>> markers).",
-    promptSnippet:
-      "Retrieve original compressed content by hash",
-    promptGuidelines: [
-      "Some tool outputs are auto-compressed and marked with <<ccr:HASH>>.",
-      "Use ccr_retrieve with the hash to get back the full original content.",
-      "Only call ccr_retrieve when the compressed summary is insufficient.",
-    ],
-    parameters: {
-      type: "object",
-      properties: {
-        hash: {
-          type: "string",
-          description: "The hash from the <<ccr:HASH>> marker to retrieve.",
-        },
-      },
-      required: ["hash"],
-    },
-    async execute(toolCallId, params, _signal, _onUpdate, _ctx) {
-      const hash = params.hash as string;
-      const original = ccrStore.get(hash);
-      if (!original) {
-        return {
-          content: [{ type: "text", text: `❌ Content with hash "${hash}" not found. It may have expired from the cache.` }],
-          details: {},
-          isError: true,
-        };
-      }
-      return {
-        content: [{ type: "text", text: original }],
-        details: { hash, length: original.length },
-        isError: false,
       };
     },
   });
