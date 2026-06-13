@@ -23,8 +23,18 @@ interface OCRData {
   det_scores?: number[];
 }
 
+/** Convert Windows path (C:\Users\...) to WSL2 path (/mnt/c/Users/...) */
+function toWslPath(windowsPath: string): string {
+  let p = windowsPath.replace(/^["']|["']$/g, ""); // strip surrounding quotes
+  // Convert C:\... to /mnt/c/...
+  p = p.replace(/^([A-Za-z]):\\/i, (_, letter: string) => `/mnt/${letter.toLowerCase()}/`);
+  p = p.replace(/\\/g, "/");
+  return p;
+}
+
 function runPaddleOCR(path: string): OCRData[] {
-  const escaped = path.replace(/'/g, "'\\''");
+  const wslPath = toWslPath(path);
+  const escaped = wslPath.replace(/'/g, "'\\''");
   const cmd = `wsl bash -ic "export PATH=\\$HOME/.local/bin:\\$PATH && paddleocr-cli '${escaped}'"`;
   const stdout = execSync(cmd, { timeout: 60_000, encoding: "utf-8" });
   return JSON.parse(stdout);
