@@ -590,9 +590,9 @@ function updateTaskWidget(cwd: string, ctx: any): void {
   const lines: string[] = [];
 
   // 当前任务 section
-  const taskMatch = notebook.match(/^## 当前任务\n([\s\S]*?)(?=\n^## |\z)/m);
+  const taskMatch = notebook.match(/^## 当前任务\r?\n([\s\S]*?)(?=\r?\n## |$)/m);
   if (taskMatch) {
-    const taskLines = taskMatch[1].trim().split("\n").filter((l: string) => l.trim() && !l.startsWith(">"));
+    const taskLines = taskMatch[1].trim().split(/\r?\n/).filter((l: string) => l.trim() && !l.startsWith(">"));
     if (taskLines.length > 0) {
       // Show first task item
       const first = taskLines[0].replace(/^- /, "").trim();
@@ -603,9 +603,9 @@ function updateTaskWidget(cwd: string, ctx: any): void {
   }
 
   // 待办 section — count pending items
-  const todoMatch = notebook.match(/^## 待办\n([\s\S]*?)(?=\n^## |\z)/m);
+  const todoMatch = notebook.match(/^## 待办\r?\n([\s\S]*?)(?=\r?\n## |$)/m);
   if (todoMatch) {
-    const pending = todoMatch[1].split("\n").filter((l: string) => l.includes("[ ]"));
+    const pending = todoMatch[1].split(/\r?\n/).filter((l: string) => l.includes("[ ]"));
     if (pending.length > 0) {
       lines.push(`⏳ ${pending.length} pending`);
       // Show first few pending items
@@ -617,9 +617,9 @@ function updateTaskWidget(cwd: string, ctx: any): void {
   }
 
   // Key decisions — show active ones
-  const decMatch = notebook.match(/^## 关键决策\n([\s\S]*?)(?=\n^## |\z)/m);
+  const decMatch = notebook.match(/^## 关键决策\r?\n([\s\S]*?)(?=\r?\n## |$)/m);
   if (decMatch) {
-    const decisions = decMatch[1].split("\n").filter((l: string) => l.trim().startsWith("-"));
+    const decisions = decMatch[1].split(/\r?\n/).filter((l: string) => l.trim().startsWith("-"));
     if (decisions.length > 0 && lines.length < 6) {
       lines.push(`💡 ${decisions.length} active decisions`);
     }
