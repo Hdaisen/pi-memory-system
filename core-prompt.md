@@ -29,13 +29,11 @@
 
 ### 上下文策略
 
-不再依赖三轮对话后清理的滑动窗口。
-
 主 LLM 每轮接收的上下文是**精心筛选过的**：
-- `essence.md`（上轮子代理蒸馏的关键信息，~500-1000 tokens）
-- `notebook.md`（子代理维护的会话状态概览，~500 tokens）
-- 长期记忆注入（~3K tokens）
-- 系统提示词（~4K tokens）
+- `essence.md`（上轮子代理蒸馏的关键信息）
+- `notebook.md`（子代理维护的会话状态概览）
+- 长期记忆注入
+- 系统提示词
 - 用户消息
 
 **原始历史不进入主 LLM 上下文。** 原始对话（`turns/raw.md`）仅由子代理在 agent_end 时读取。
@@ -72,20 +70,16 @@ agent_end（由扩展 + 子代理完成）:
   ├─ 收集本轮消息 + 工具输出 → 写入 turns/raw.md
   │   - >5KB tool result → 截断 + hash（原文存 turns/raw/<hash>.txt）
   │   - read 文件内容同规则
-  ├─ 写标志文件 extraction-pending
-  └─ ✓ 完成（<1ms，不阻塞）
+  ├─ 启动子代理 Pi 进程（同步等待）
+  │   ├─ execSync(`pi -p --no-session --append-system-prompt memory-extractor.md ...`)
+  │   ├─ 子进程读 raw.md → 写 essence.md + 更新 notebook + remember
+  │   └─ 完成后退出自销毁
+  └─ ✓ 完成（~1-3s）
 
-  subagent（memory-extractor，异步）:
-  ├─ 检测 extraction-pending → 读 raw.md
-  ├─ 读 notebook.md + 记忆索引
-  ├─ 判断并执行：
-  │   ├─ 进 essence.md（下一轮接力棒——关键发现/代码片段/结论）
-  │   ├─ 进 notebook.md（任务进度更新、待办清理）
-  │   └─ 进长期记忆（remember 调用——facts/decisions/events）
-  ├─ 写入 essence.md
-  ├─ 直接编辑 notebook.md
-  ├─ 直接调用 remember
-  └─ ✓ 自销毁
+before_agent_start（下一轮）:
+  ├─ 读 essence.md（子代理已写入）
+  ├─ 注入 core-prompt + rules + notebook + essence + 关联记忆
+  └─ 主 LLM 获得完整接力棒
 
 需要查旧记忆时 → recall / 翻阅记忆文件，不自动注入大量记忆
 ```

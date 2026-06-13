@@ -111,31 +111,7 @@ const PATHS = {
 //    Only the current turn needs to stay in context.
 const KEEP_RECENT_TURNS = 1;
 
-// 🔒 When true, the next context refinement is suppressed.
-//    Set via /rec command. Reset automatically after one suppression.
-let _refineSuppressed = false;
-let _userMessageCount = 0;
-
-// (removed: layered injection — always inject full context)
-
-/**
- * Compute the context refinement status for display.
- * Uses the handler's own counter, not sessionManager, to stay accurate.
- */
-function getRefineStatus(): string {
-  if (_refineSuppressed) return "⏸️ Context: /rec active";
-
-  if (_userMessageCount <= KEEP_RECENT_TURNS) {
-    const remaining = KEEP_RECENT_TURNS - _userMessageCount + 1;
-    let s = `🧠 Trim: ${_userMessageCount}/${KEEP_RECENT_TURNS}`;
-    if (remaining > 2) s += ` /trim:force`;
-    else if (remaining === 2) s += ` /rec|/trim`;
-    else if (remaining === 1) s += ` /rec:skip`;
-    return s;
-  }
-
-  return `🧠 Trim: ✅ cleaned (/trim to force)`;
-}
+// (removed: subagent handles memory maintenance, no refinement needed)
 
 // ============================================================
 // Helpers
@@ -804,11 +780,39 @@ function writeRawMd(cwd: string, messages: any[]): void {
   // Write raw.md
   const rawMdPath = path.join(turnsDir, "raw.md");
   fs.writeFileSync(rawMdPath, md, "utf-8");
+}
 
-  // Write extraction-pending flag (empty file signals to subagent)
-  const flagDir = path.join(PATHS.projectDir(cwd), "flags");
-  fs.mkdirSync(flagDir, { recursive: true });
-  fs.writeFileSync(path.join(flagDir, "extraction-pending"), "", "utf-8");
+// ============================================================
+// Subagent spawning — run a Pi child process for memory extraction
+// ============================================================
+
+/**
+ * Spawn a non-interactive Pi process to run memory extraction.
+ * Reads raw.md, writes essence.md, updates notebook, calls remember.
+ */
+function spawnSubagent(cwd: string): void {
+  const piPkgPath = require.resolve("@earendil-works/pi-coding-agent/package.json");
+  const piRoot = path.dirname(piPkgPath);
+  const piCli = path.join(piRoot, "dist", "cli.js");
+  const nodeExe = process.execPath;
+  const extractorPrompt = path.join(HOME, ".pi", "agent", "agents", "memory-extractor.md");
+  const rawMdPath = path.join(PATHS.turnsDir(cwd), "raw.md");
+
+  // Prepare the task instruction
+  const cmd = [
+    `"${nodeExe}"`,
+    `"${piCli}"`,
+    "-p",              // non-interactive print mode
+    "--no-session",    // ephemeral, no session file
+    "--no-skills",     // skip skills (speedup)
+    "--no-themes",     // skip themes (speedup)
+    "--tools read,write,edit,remember,recall,notebook",  // only needed tools
+    `--append-system-prompt @"${extractorPrompt}"`,
+    `"Read ${rawMdPath} and perform the memory extraction tasks."`
+  ].join(" ");
+
+  // The timeout is generous — even verbose rounds rarely exceed 30s
+  execSync(cmd, { cwd, timeout: 120000, stdio: "pipe" });
 }
 
 // ============================================================
@@ -823,8 +827,7 @@ export default function (pi: ExtensionAPI) {
   // session_start
   // ============================================================
   pi.on("session_start", async (_event, ctx) => {
-    _refineSuppressed = false;
-    ctx.ui.setStatus("refine", "🧠 Trim: 0/3");
+    ctx.ui.setStatus("memory", "🧠 Memory: idle");
     updateTaskWidget(ctx.cwd, ctx);
   });
 
@@ -873,14 +876,6 @@ export default function (pi: ExtensionAPI) {
     if (rules) memoryContext += `\n${rules}\n`;
     memoryContext += `\n---\n\n${notebookSection}${essenceSection}${linkedSection}\n`;
 
-    // 7. Check if last round's extraction is pending → instruct LLM to launch subagent
-    const flagFile = path.join(PATHS.projectDir(cwd), "flags", "extraction-pending");
-    if (fs.existsSync(flagFile)) {
-      try { fs.unlinkSync(flagFile); } catch { /* best effort */ }
-      memoryContext += `\n\n---\n\n## 🧠 系统维护\n`;
-      memoryContext += `上轮对话的记忆提取待处理。请启动 memory-extractor 子代理（async），然后继续。\n`;
-    }
-
     return {
       systemPrompt: event.systemPrompt + `\n\n${memoryContext}`,
     };
@@ -890,27 +885,12 @@ export default function (pi: ExtensionAPI) {
   // context: refine conversation context
   //
   // ⚠️  DESIGN NOTES:
-  //   - Pi fires `context` event BEFORE EVERY LLM CALL, not just before
-  //     each user turn. A single user input can trigger 5+ LLM calls
-  //     if there are tool calls in sequence.
-  //   - The naive approach (count user messages, drop old ones) breaks
-  //     when the agent is stuck in a tool-call loop — context gets
-  //     trimmed mid-turn, discarding recent assistant/tool messages
-  //     that are essential for debugging the loop.
-  //   - Our strategy: use a token-based guard. Don't trim unless the
-  //     total message payload is genuinely large. And only trim at
-  //     the START of a user turn (not mid-turn during tool loops).
+  //   - Only acts as a safety guard against message accumulation.
+  //   - Subagent distillation handles cross-turn info via essence.md.
   // ============================================================
   pi.on("context", async (event, ctx) => {
     const messages = event.messages;
     if (!messages || messages.length <= 5) return;
-
-    // /rec suppression: skip cleanup once, then reset
-    if (_refineSuppressed) {
-      _refineSuppressed = false;
-      ctx.ui.setStatus("refine", getRefineStatus());
-      return;
-    }
 
     const userMsgIndices: number[] = [];
     const systemIndices: number[] = [];
@@ -921,52 +901,49 @@ export default function (pi: ExtensionAPI) {
       if (m.role === "system" || m.role === "developer") systemIndices.push(i);
     }
 
-    // Update counter from event.messages (accurate), not sessionManager
-    _userMessageCount = userMsgIndices.length;
-
     // Don't trim mid-turn: if the last message is NOT a user message,
-    // we're in the middle of a tool-calling loop. Trimming now would
-    // discard assistant/tool/error messages the LLM needs to see.
+    // we're in the middle of a tool-calling loop.
     const lastMsg = messages[messages.length - 1];
     if (lastMsg && lastMsg.role !== "user") return;
 
-    // Only trim if there are more than KEEP_RECENT_TURNS user messages.
-    if (userMsgIndices.length <= KEEP_RECENT_TURNS) {
-      ctx.ui.setStatus("refine", getRefineStatus());
-      return;
-    }
+    // Only trim if more than KEEP_RECENT_TURNS user turns remain
+    // (safety guard — normally only 1 turn is in context)
+    if (userMsgIndices.length <= KEEP_RECENT_TURNS) return;
 
     const keepFrom = userMsgIndices[userMsgIndices.length - KEEP_RECENT_TURNS];
     const filtered: typeof messages = [];
 
-    // Keep all system/developer messages
     for (const idx of systemIndices) {
       filtered.push(messages[idx]);
     }
-
-    // Keep the most recent KEEP_RECENT_TURNS turns
     for (let i = keepFrom; i < messages.length; i++) {
       filtered.push(messages[i]);
     }
 
-    // Reset counter post-cleanup (only KEEP_RECENT_TURNS user turns remain)
-    _userMessageCount = KEEP_RECENT_TURNS;
-    ctx.ui.setStatus("refine", `🧠 Trim: ✅ cleaned (kept ${KEEP_RECENT_TURNS} user turns)`);
     return { messages: filtered };
   });
 
   // ============================================================
-  // agent_end: update status + write raw.md + flag subagent
+  // agent_end: update status + spawn subagent for memory extraction
   // ============================================================
   pi.on("agent_end", async (_event, ctx) => {
     const cwd = ctx.cwd;
 
-    // Write raw.md from messages if available
+    // 1. Write raw.md from messages
     if (_event && (_event as any).messages) {
       writeRawMd(cwd, (_event as any).messages);
     }
 
-    ctx.ui.setStatus("refine", getRefineStatus());
+    // 2. Spawn subagent Pi process for memory extraction
+    ctx.ui.setStatus("memory", "🧠 Memory: extracting...");
+    try {
+      spawnSubagent(cwd);
+      ctx.ui.setStatus("memory", "🧠 Memory: ready");
+    } catch (e) {
+      console.warn("[memory] Subagent extraction failed:", e);
+      ctx.ui.setStatus("memory", "🧠 Memory: ⚠️ error");
+    }
+
     updateTaskWidget(cwd, ctx);
   });
 
@@ -1757,36 +1734,6 @@ Or install it: pip install markitdown (in WSL venv at ~/.markitdown-venv/)`,
         content: [{ type: "text", text: `✅ Project name set to "${name}". Notebook and memories will now resolve under projects/${name}/.` }],
         details: { projectName: name },
       };
-    },
-  });
-
-  // ============================================================
-  // Command: /rec — suppress context refinement for next turn
-  // ============================================================
-  pi.registerCommand("rec", {
-    description:
-      "Suppress context refinement for the next user message. " +
-      "Use this in extreme cases when you don't want old context cleaned yet. " +
-      "Reset happens automatically after one suppressed turn.",
-    handler: async (_args, ctx) => {
-      _refineSuppressed = true;
-      ctx.ui.setStatus("refine", "⏸️ Context: /rec active (next msg won't trim)");
-      return "⏸️ Context refinement suppressed for next message only. Send your next message normally — it won't trigger trimming.";
-    },
-  });
-
-  // ============================================================
-  // Command: /trim — manually trigger context refinement now
-  // ============================================================
-  pi.registerCommand("trim", {
-    description:
-      "Manually trigger context refinement immediately. Forces cleanup " +
-      "of old conversation history, keeping only the last 3 turns. " +
-      "Use this when context feels bloated and you want a fresh view.",
-    handler: async (_args, ctx) => {
-      _userMessageCount = KEEP_RECENT_TURNS + 1;
-      ctx.ui.setStatus("refine", "🧠 Trim: /trim queued");
-      return `🧠 Trim queued. Next message will clean context (keep last ${KEEP_RECENT_TURNS} turns). You can still type /rec before sending to cancel.`;
     },
   });
 }
