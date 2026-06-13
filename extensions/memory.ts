@@ -556,35 +556,40 @@ last_maintenance: ${new Date().toISOString()}
 function ensureWslSymlink(): void {
   try {
     // Check if WSL is available
-    const wslCheck = execSync("where wsl.exe", { encoding: "utf8", timeout: 3000, stdio: ["pipe", "pipe", "ignore"] });
-    if (!wslCheck.trim()) return;
+    const wslPath = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "wsl.exe");
+    if (!fs.existsSync(wslPath)) return;
 
     // Get WSL username
-    const wslUser = execSync("wsl.exe whoami", { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "ignore"] }).trim();
+    const wslUser = execSync(`"${wslPath}" whoami`, { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "ignore"] }).trim();
     const winUser = process.env.USERNAME || "";
     if (!wslUser || !winUser) return;
-    if (wslUser === winUser) return; // Usernames match, no symlink needed
+    if (wslUser === winUser) return;
 
-    // Paths
+    // Paths (use WSL paths inside WSL)
     const winMemoryPath = `/mnt/c/Users/${winUser}/.pi/agent/memory`;
     const wslMemoryPath = `/home/${wslUser}/.pi/agent/memory`;
 
-    // Check if symlink already exists and points to correct target
-    const existing = execSync(
-      `wsl.exe -e bash -c 'readlink "${wslMemoryPath}" 2>/dev/null || echo "NOT_LINK"'`,
-      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "ignore"] }
-    ).trim();
-    if (existing === winMemoryPath) return; // Already correct
+    // Check if symlink already exists
+    try {
+      const existing = execSync(
+        `"${wslPath}" readlink "${wslMemoryPath}" 2>/dev/null || echo NOT_LINK`,
+        { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "ignore"] }
+      ).trim();
+      if (existing === winMemoryPath) return;
+    } catch {}
 
-    // Create parent dir and symlink
+    // Create parent dir and symlink — use wsl default shell, no -e flag (Windows doesn't understand single quotes)
     execSync(
-      `wsl.exe -e bash -c 'mkdir -p /home/${wslUser}/.pi/agent && ln -sf "${winMemoryPath}" "${wslMemoryPath}"'`,
-      { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "ignore"] }
+      `"${wslPath}" mkdir -p /home/${wslUser}/.pi/agent`,
+      { encoding: "utf8", timeout: 10000 }
+    );
+    execSync(
+      `"${wslPath}" ln -sf "${winMemoryPath}" "${wslMemoryPath}"`,
+      { encoding: "utf8", timeout: 10000 }
     );
     console.log(`[memory] Created WSL symlink: ${wslMemoryPath} \u2192 ${winMemoryPath}`);
   } catch (e) {
-    // WSL not available or command failed \u2014 not critical
-    console.warn("[memory] WSL symlink creation skipped:", e);
+    // WSL not available or command failed — not critical, suppress
   }
 }
 
@@ -791,9 +796,26 @@ function writeRawMd(cwd: string, messages: any[]): void {
  * Reads raw.md, writes essence.md, updates notebook, calls remember.
  */
 function spawnSubagent(cwd: string): void {
-  const piPkgPath = require.resolve("@earendil-works/pi-coding-agent/package.json");
-  const piRoot = path.dirname(piPkgPath);
-  const piCli = path.join(piRoot, "dist", "cli.js");
+  // Find pi CLI path — avoid jiti's broken require.resolve
+  const piCli = (() => {
+    // Try the common global install locations
+    const candidates = [
+      // Global npm install: node.exe is in the same dir as node_modules
+      path.join(path.dirname(process.execPath), "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js"),
+    ];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) return c;
+    }
+    // Fallback: resolve from the global node_modules
+    try {
+      return require.resolve("@earendil-works/pi-coding-agent/dist/cli.js");
+    } catch {}
+    return "";
+  })();
+  if (!piCli || !fs.existsSync(piCli)) {
+    console.warn("[memory] pi CLI not found, skipping subagent extraction");
+    return;
+  }
   const nodeExe = process.execPath;
   const extractorPrompt = path.join(HOME, ".pi", "agent", "agents", "memory-extractor.md");
   const rawMdPath = path.join(PATHS.turnsDir(cwd), "raw.md");
@@ -806,13 +828,18 @@ function spawnSubagent(cwd: string): void {
     "--no-session",    // ephemeral, no session file
     "--no-skills",     // skip skills (speedup)
     "--no-themes",     // skip themes (speedup)
-    "--tools read,write,edit,remember,recall,notebook",  // only needed tools
+    "--tools read,write,edit,remember,recall,notebook,forget,supersede",  // only needed tools
     `--append-system-prompt @"${extractorPrompt}"`,
     `"Read ${rawMdPath} and perform the memory extraction tasks."`
   ].join(" ");
 
   // The timeout is generous — even verbose rounds rarely exceed 30s
-  execSync(cmd, { cwd, timeout: 120000, stdio: "pipe" });
+  execSync(cmd, {
+    cwd,
+    timeout: 120000,
+    stdio: "pipe",
+    env: { ...process.env, PI_SUBAGENT: "1" }
+  });
 }
 
 // ============================================================
@@ -881,67 +908,73 @@ export default function (pi: ExtensionAPI) {
     };
   });
 
-  // ============================================================
-  // context: refine conversation context
-  //
-  // ⚠️  DESIGN NOTES:
-  //   - Only acts as a safety guard against message accumulation.
-  //   - Subagent distillation handles cross-turn info via essence.md.
+  // context: keep only system messages (our injections), strip all history
   // ============================================================
   pi.on("context", async (event, ctx) => {
     const messages = event.messages;
-    if (!messages || messages.length <= 5) return;
-
-    const userMsgIndices: number[] = [];
-    const systemIndices: number[] = [];
-
-    for (let i = 0; i < messages.length; i++) {
-      const m = messages[i];
-      if (m.role === "user") userMsgIndices.push(i);
-      if (m.role === "system" || m.role === "developer") systemIndices.push(i);
-    }
+    if (!messages || messages.length <= 2) return;
 
     // Don't trim mid-turn: if the last message is NOT a user message,
     // we're in the middle of a tool-calling loop.
     const lastMsg = messages[messages.length - 1];
     if (lastMsg && lastMsg.role !== "user") return;
 
-    // Only trim if more than KEEP_RECENT_TURNS user turns remain
-    // (safety guard — normally only 1 turn is in context)
-    if (userMsgIndices.length <= KEEP_RECENT_TURNS) return;
+    // At user turn boundary: keep only system/developer (our injections)
+    const filtered = messages.filter(
+      (m: any) => m.role === "system" || m.role === "developer"
+    );
 
-    const keepFrom = userMsgIndices[userMsgIndices.length - KEEP_RECENT_TURNS];
-    const filtered: typeof messages = [];
+    // If nothing to trim, skip
+    if (filtered.length === messages.length) return;
 
-    for (const idx of systemIndices) {
-      filtered.push(messages[idx]);
-    }
-    for (let i = keepFrom; i < messages.length; i++) {
-      filtered.push(messages[i]);
-    }
-
+    ctx.ui.setStatus("memory", "🧠 Memory: history stripped");
     return { messages: filtered };
   });
 
   // ============================================================
-  // agent_end: update status + spawn subagent for memory extraction
+  // agent_end: write raw.md + spawn subagent
   // ============================================================
   pi.on("agent_end", async (_event, ctx) => {
     const cwd = ctx.cwd;
 
-    // 1. Write raw.md from messages
-    if (_event && (_event as any).messages) {
-      writeRawMd(cwd, (_event as any).messages);
-    }
+    // 跳过子代理自身触发的 agent_end（避免递归循环）
+    if (process.env.PI_SUBAGENT === "1") return;
 
-    // 2. Spawn subagent Pi process for memory extraction
-    ctx.ui.setStatus("memory", "🧠 Memory: extracting...");
-    try {
-      spawnSubagent(cwd);
-      ctx.ui.setStatus("memory", "🧠 Memory: ready");
-    } catch (e) {
-      console.warn("[memory] Subagent extraction failed:", e);
-      ctx.ui.setStatus("memory", "🧠 Memory: ⚠️ error");
+    const messages = (_event as any)?.messages;
+    if (messages && Array.isArray(messages)) {
+      // 1. 写 messages.json
+      const turnsDir = PATHS.turnsDir(cwd);
+      const rawDir = path.join(turnsDir, "raw");
+      fs.mkdirSync(rawDir, { recursive: true });
+      const jsonPath = path.join(rawDir, "messages.json");
+      fs.writeFileSync(jsonPath, JSON.stringify(messages, null, 2), "utf-8");
+
+      // 2. 调 Python 脚本生成 raw.md
+      ctx.ui.setStatus("memory", "🧠 Memory: formatting...");
+      const scriptPath = path.join(HOME, ".pi", "agent", "scripts", "write_raw.py");
+      const outputPath = path.join(turnsDir, "raw.md");
+      const pythonCmd = [
+        `python3`,
+        `"${scriptPath}"`,
+        `--input "${jsonPath}"`,
+        `--output "${outputPath}"`,
+        `--raw-dir "${rawDir}"`
+      ].join(" ");
+      try {
+        execSync(pythonCmd, { cwd, timeout: 30000, stdio: "pipe" });
+      } catch (e) {
+        console.warn("[memory] write_raw.py failed:", e);
+      }
+
+      // 3. 启动子代理
+      ctx.ui.setStatus("memory", "🧠 Memory: extracting...");
+      try {
+        spawnSubagent(cwd);
+        ctx.ui.setStatus("memory", "🧠 Memory: ready");
+      } catch (e) {
+        console.warn("[memory] Subagent extraction failed:", e);
+        ctx.ui.setStatus("memory", "🧠 Memory: ⚠️ error");
+      }
     }
 
     updateTaskWidget(cwd, ctx);

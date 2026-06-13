@@ -29,7 +29,7 @@
 
 ### 上下文策略
 
-主 LLM 每轮接收的上下文是**精心筛选过的**：
+主 LLM 每轮接收的上下文是**精心筛选过的**，**不包含任何原始对话历史**：
 - `essence.md`（上轮子代理蒸馏的关键信息）
 - `notebook.md`（子代理维护的会话状态概览）
 - 长期记忆注入
@@ -38,7 +38,7 @@
 
 **原始历史不进入主 LLM 上下文。** 原始对话（`turns/raw.md`）仅由子代理在 agent_end 时读取。
 
-Pi 的 `context` 事件仍然保留作为安全网，但子代理蒸馏是主要的信息传递机制。
+Pi 的 `context` 事件在每轮开始时自动清除所有 user/assistant/tool 消息，只保留 system 层（我们的注入）。
 
 ### 记忆作用域规则
 
@@ -67,14 +67,17 @@ before_agent_start:
 
 agent_end（由扩展 + 子代理完成）:
   扩展机械层:
-  ├─ 收集本轮消息 + 工具输出 → 写入 turns/raw.md
-  │   - >5KB tool result → 截断 + hash（原文存 turns/raw/<hash>.txt）
-  │   - read 文件内容同规则
+  ├─ 收集本轮消息 → 写入 turns/raw/messages.json
+  ├─ execSync(`python3 write_raw.py --input messages.json --output raw.md`)
+  │   生成 turns/raw.md（过滤 system 提示词 + 截断 read 结果）
   ├─ 启动子代理 Pi 进程（同步等待）
-  │   ├─ execSync(`pi -p --no-session --append-system-prompt memory-extractor.md ...`)
+  │   ├─ execSync(`pi -p --no-session --append-system-prompt memory-extractor.md ...`, { PI_SUBAGENT: 1 })
   │   ├─ 子进程读 raw.md → 写 essence.md + 更新 notebook + remember
   │   └─ 完成后退出自销毁
   └─ ✓ 完成（~1-3s）
+
+context（每轮开始前）:
+  └─ 清除所有 user/assistant/tool 消息，只保留 system 注入
 
 before_agent_start（下一轮）:
   ├─ 读 essence.md（子代理已写入）
