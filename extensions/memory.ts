@@ -698,6 +698,19 @@ function updateTaskWidget(cwd: string, ctx: any): void {
 // raw.md generation — format conversation + tool results to Markdown
 // ============================================================
 
+/** Extract main brain's verbatim text from an assistant message. */
+function extractAssistantText(content: any): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((b: any) => b.type === "text")
+      .map((b: any) => b.text || "")
+      .join("\n")
+      .trim();
+  }
+  return "";
+}
+
 // ============================================================
 // Extension — register hooks & tools
 // ============================================================
@@ -881,6 +894,20 @@ export default function (pi: ExtensionAPI) {
           reject(err);
         });
       });
+
+      // ── Inject main brain's last verbatim response into essence.md ──
+      const lastAssistant = [...messages].reverse().find((m: any) => m.role === "assistant");
+      if (lastAssistant) {
+        const text = extractAssistantText(lastAssistant.content);
+        if (text) {
+          const essencePath = path.join(PATHS.turnsDir(cwd), "essence.md");
+          const existing = safeRead(essencePath);
+          if (existing) {
+            const block = `## 主脑上一轮原始回复\n\n以下是我上一轮结束时的完整回复抄录：\n\n\`\`\`\n${text.trim()}\n\`\`\`\n\n---\n\n`;
+            fs.writeFileSync(essencePath, block + existing.trim() + "\n", "utf-8");
+          }
+        }
+      }
 
       ctx.ui.setStatus("memory", "🧠 🟢");
     } catch (e) {
