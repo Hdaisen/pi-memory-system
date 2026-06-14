@@ -986,6 +986,12 @@ export default function (pi: ExtensionAPI) {
             "If content doesn't fit any existing category, propose a new file name and ASK THE USER FOR CONFIRMATION before using it. " +
             "If omitted, falls back to a single general file (e.g., events.md).",
         },
+        title: {
+          type: "string",
+          description:
+            "Optional: explicit title for the entry. If omitted, the first line of content is used. " +
+            "Use this when the first line of content is too long or generic.",
+        },
         related: {
           type: "string",
           description: "Related [[Wiki-links]], comma separated",
@@ -1026,15 +1032,16 @@ export default function (pi: ExtensionAPI) {
       const trigger = params.trigger as string | undefined;
 
       const existing = safeRead(targetFile);
+      // Title: use explicit title if provided, otherwise derive from content
+      // WITHOUT auto-truncation — no more '...' surprise
       let entryTitle: string;
-      if (category === "event") {
-        entryTitle = `${timestamp}: ${params.content.slice(0, 40)}`;
+      if (params.title) {
+        entryTitle = (params.title as string).trim();
+      } else if (category === "event") {
+        const firstLine = params.content.split("\n")[0].trim();
+        entryTitle = `${timestamp}: ${firstLine.slice(0, 60)}`;
       } else {
-        const contentFirstLine = params.content.split("\n")[0].trim();
-        entryTitle =
-          contentFirstLine.length > 50
-            ? contentFirstLine.slice(0, 47) + "..."
-            : contentFirstLine;
+        entryTitle = params.content.split("\n")[0].trim();
       }
 
       const metaLines: string[] = [];
