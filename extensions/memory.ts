@@ -757,11 +757,17 @@ export default function (pi: ExtensionAPI) {
     const notebookSection =
       notebookContent || "# Session Notebook\n（Not initialized）\n";
 
-    // 4. Read essence.md (last turn's handoff, written by subagent)
+    // 4. Read turn-summary.md (main brain's last response, written by extension)
+    //    + essence.md (subagent's distilled handoff, if available)
     const turnsDir = path.join(PATHS.projectDir(cwd), "turns");
+    const summaryContent = safeRead(path.join(turnsDir, "turn-summary.md"));
+    const summarySection = summaryContent
+      ? `\n\n---\n\n## 上轮摘要\n\n${summaryContent.trim()}\n`
+      : "";
+    // essence.md is still read for subagent's analysis (optional enrichment)
     const essenceContent = safeRead(path.join(turnsDir, "essence.md"));
     const essenceSection = essenceContent
-      ? `\n\n---\n\n## 上轮摘要\n\n${essenceContent.trim()}\n`
+      ? `\n\n---\n\n## 子代理分析\n\n${essenceContent.trim()}\n`
       : "";
 
     // 5. Build linked memories from notebook [[Wiki-links]]
@@ -776,7 +782,7 @@ export default function (pi: ExtensionAPI) {
     // 6. Build memory context — core + rules + notebook + essence + linked
     let memoryContext = `${coreSection}\n`;
     if (rules) memoryContext += `\n${rules}\n`;
-    memoryContext += `\n---\n\n${notebookSection}${essenceSection}${linkedSection}\n`;
+    memoryContext += `\n---\n\n${notebookSection}${summarySection}${essenceSection}${linkedSection}\n`;
 
     return {
       systemPrompt: event.systemPrompt + `\n\n${memoryContext}`,
@@ -895,17 +901,17 @@ export default function (pi: ExtensionAPI) {
         });
       });
 
-      // ── Inject main brain's last verbatim response into essence.md ──
+      // ── Write turn-summary.md (main brain's last response, injected next turn) ──
+      // This file is written by the extension, NOT by the subagent.
+      // essence.md is exclusively for the subagent's distilled output.
       const lastAssistant = [...messages].reverse().find((m: any) => m.role === "assistant");
       if (lastAssistant) {
         const text = extractAssistantText(lastAssistant.content);
         if (text) {
-          const essencePath = path.join(PATHS.turnsDir(cwd), "essence.md");
-          const existing = safeRead(essencePath);
-          if (existing) {
-            const block = `## 主脑上一轮原始回复\n\n以下是我上一轮结束时的完整回复抄录：\n\n\`\`\`\n${text.trim()}\n\`\`\`\n\n---\n\n`;
-            fs.writeFileSync(essencePath, block + existing.trim() + "\n", "utf-8");
-          }
+          const summaryPath = path.join(PATHS.turnsDir(cwd), "turn-summary.md");
+          const timestamp = new Date().toISOString().replace("T", " ").slice(0, 19);
+          const block = `# 主脑上一轮回复 (${timestamp})\n\n${text.trim()}\n`;
+          fs.writeFileSync(summaryPath, block, "utf-8");
         }
       }
 
