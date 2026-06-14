@@ -320,6 +320,14 @@ def main():
         print("[extract] ✗ no messages", file=sys.stderr)
         sys.exit(1)
 
+    # Defense-in-depth: skip if messages are incomplete (only system or < 2 total).
+    # Catches any edge case where memory.ts's agent_end guards miss an abort.
+    non_system = [m for m in messages if m.get("role") not in ("system", "developer")]
+    if len(non_system) < 2:
+        roles = [m.get("role", "?") for m in messages]
+        print(f"[extract] ✗ messages too few/trivial ({roles}), skipping extraction", file=sys.stderr)
+        sys.exit(0)  # exit 0 — nothing to extract, not an error
+
     # 项目路径推导（和 memory.ts 的 PATHS 一致）
     cwd = os.getcwd()
     proj_name = os.path.basename(cwd)

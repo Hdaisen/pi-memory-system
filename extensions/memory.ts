@@ -795,29 +795,47 @@ export default function (pi: ExtensionAPI) {
 
   // ============================================================
   // agent_end: call Python script (format + subagent)
+  //
+  // Guards (in order):
+  //   1. PI_SUBAGENT — prevents subagent process from spawning nested subagents
+  //   2. ctx.signal?.aborted — skips extraction when user presses ESC
+  //   3. Meaningful content check — skips extraction when messages are noise
   // ============================================================
   pi.on("agent_end", async (_event, ctx) => {
     const cwd = ctx.cwd;
 
+    // Guard 1: Prevent subagent recursion. The Python script sets PI_SUBAGENT=1
+    // when spawning the child pi process. Without this, agent_end in the child
+    // would trigger another extraction chain → infinite loop.
     if (process.env.PI_SUBAGENT === "1") return;
 
+    // Guard 2: Session was aborted (user pressed ESC). The conversation is
+    // incomplete — extracting noise would corrupt memory.
+    if (ctx.signal?.aborted) {
+      console.log("[memory] session aborted, skipping extraction");
+      return;
+    }
+
     const messages = (_event as any)?.messages;
-    if (messages && Array.isArray(messages)) {
-      ctx.ui.setStatus("memory", "🧠 🟡");
-      const scriptPath = path.join(HOME, ".pi", "agent", "scripts", "run_extraction.py");
-      try {
-        execSync(`python3 "${scriptPath}"`, {
-          cwd,
-          timeout: 180000,
-          stdio: ["pipe", "pipe", "pipe"],
-          input: JSON.stringify(messages),
-          env: { ...process.env, PI_SUBAGENT: "1" }
-        });
-        ctx.ui.setStatus("memory", "🧠 🟢");
-      } catch (e) {
-        console.warn("[memory] extraction failed:", e);
-        ctx.ui.setStatus("memory", "🧠 🔴");
-      }
+
+    // Guard 3: No messages or array too small to be meaningful (< 2 = no
+    // complete user-assistant interaction).
+    if (!messages || !Array.isArray(messages) || messages.length < 2) return;
+
+    ctx.ui.setStatus("memory", "🧠 🟡");
+    const scriptPath = path.join(HOME, ".pi", "agent", "scripts", "run_extraction.py");
+    try {
+      execSync(`python3 "${scriptPath}"`, {
+        cwd,
+        timeout: 180000,
+        stdio: ["pipe", "pipe", "pipe"],
+        input: JSON.stringify(messages),
+        env: { ...process.env, PI_SUBAGENT: "1" }
+      });
+      ctx.ui.setStatus("memory", "🧠 🟢");
+    } catch (e) {
+      console.warn("[memory] extraction failed:", e);
+      ctx.ui.setStatus("memory", "🧠 🔴");
     }
 
     updateTaskWidget(cwd, ctx);
