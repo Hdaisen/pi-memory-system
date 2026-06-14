@@ -110,7 +110,8 @@ def format_content_block(content) -> str:
                 if bt == "text":
                     parts.append(block.get("text", ""))
                 elif bt == "thinking":
-                    parts.append(f"[thinking]\n{block.get('thinking', '')}\n[/thinking]")
+                    # Strip thinking content — too verbose, not useful for memory
+                    parts.append("[thinking block — filtered]")
                 elif bt == "toolCall":
                     continue
                 elif bt == "image":
@@ -263,7 +264,12 @@ def write_raw_md(messages: list, turns_dir: Path) -> Path:
 # ============================================================
 
 def spawn_subagent(turns_dir: Path):
-    """启动 pi -p 进程进行记忆提取"""
+    """启动 pi -p 进程进行记忆提取
+
+    Streaming 模式：子代理的 stdout/stderr 实时输出到终端，
+    用户能看到进度而非黑屏。用 bytes 模式 + UTF-8 解码
+    避免 Windows GBK 编码崩溃。
+    """
     raw_md = turns_dir / "raw.md"
     extractor_prompt = AGENTS_DIR / "memory-extractor.md"
 
@@ -285,22 +291,33 @@ def spawn_subagent(turns_dir: Path):
     env = os.environ.copy()
     env["PI_SUBAGENT"] = "1"
 
-    result = subprocess.run(
+    print("[extract] Starting memory extraction subagent...", file=sys.stderr)
+
+    # ── Streaming mode ──
+    # 用 PIPE + 实时行读取替代 capture_output=True，
+    # 用户终端能看到子代理的实时输出
+    proc = subprocess.Popen(
         full_cmd,
         shell=True,
-        cwd=turns_dir.parent,  # 项目目录
-        timeout=120,
-        capture_output=True,
-        text=True,
+        cwd=turns_dir.parent,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,  # 合并 stderr → stdout
         env=env,
     )
 
-    if result.returncode == 0:
+    # 逐行读取并输出，bytes → UTF-8 避免 GBK 崩溃
+    assert proc.stdout is not None
+    for raw_line in iter(proc.stdout.readline, b""):
+        line = raw_line.decode("utf-8", errors="replace").rstrip()
+        if line:
+            print(f"  {line}", file=sys.stderr)
+
+    proc.wait(timeout=120)
+
+    if proc.returncode == 0:
         print(f"[extract] ✓ subagent: done", file=sys.stderr)
     else:
-        stderr = (result.stderr or "")[:500]
-        print(f"[extract] ✗ subagent: exit={result.returncode}, {stderr}", file=sys.stderr)
-        raise RuntimeError(f"subagent failed (exit={result.returncode})")
+        raise RuntimeError(f"subagent failed (exit={proc.returncode})")
 
 
 # ============================================================

@@ -823,18 +823,37 @@ export default function (pi: ExtensionAPI) {
     if (!messages || !Array.isArray(messages) || messages.length < 2) return;
 
     ctx.ui.setStatus("memory", "🧠 🟡");
+    console.log("[memory] Starting extraction...");
     const scriptPath = path.join(HOME, ".pi", "agent", "scripts", "run_extraction.py");
     try {
-      execSync(`python3 "${scriptPath}"`, {
-        cwd,
-        timeout: 180000,
-        stdio: ["pipe", "pipe", "pipe"],
-        input: JSON.stringify(messages),
-        env: { ...process.env, PI_SUBAGENT: "1" }
+      // Use spawn with inherited stdio so user sees real-time progress
+      // instead of a frozen terminal. stdin is piped to send messages JSON.
+      const { spawn } = await import("node:child_process");
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 180000);
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn("python3", [scriptPath], {
+          cwd,
+          stdio: ["pipe", "inherit", "inherit"],
+          env: { ...process.env, PI_SUBAGENT: "1" },
+          signal: ac.signal,
+        });
+        child.stdin!.end(JSON.stringify(messages));
+        child.on("exit", (code) => {
+          clearTimeout(timer);
+          if (code === 0) resolve();
+          else reject(new Error(`exit code ${code}`));
+        });
+        child.on("error", (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
       });
+      console.log("[memory] ✓ extraction complete");
       ctx.ui.setStatus("memory", "🧠 🟢");
     } catch (e) {
-      console.warn("[memory] extraction failed:", e);
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn("[memory] extraction failed:", msg);
       ctx.ui.setStatus("memory", "🧠 🔴");
     }
 
