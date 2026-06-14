@@ -700,10 +700,12 @@ function updateTaskWidget(cwd: string, ctx: any): void {
 
 // ============================================================
 // Extension — register hooks & tools
+// ============================================================
 
-// ============================================================
-// Extension — register hooks & tools
-// ============================================================
+/** Flag: set when the current agent session is aborted (ESC).
+ *  ctx.signal is undefined during agent_end (turn already cleaned up),
+ *  so we track abort state manually via turn_end / tool_call events. */
+let _agentAborted = false;
 
 export default function (pi: ExtensionAPI) {
   // Create WSL symlink at startup if Windows/WSL usernames differ
@@ -713,6 +715,7 @@ export default function (pi: ExtensionAPI) {
   // session_start
   // ============================================================
   pi.on("session_start", async (_event, ctx) => {
+    _agentAborted = false;
     ctx.ui.setStatus("memory", "🧠 🟢");
     updateTaskWidget(ctx.cwd, ctx);
   });
@@ -794,62 +797,91 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ============================================================
+  // agent_start: reset abort flag at the start of each agent run
+  // ============================================================
+  pi.on("agent_start", async () => {
+    _agentAborted = false;
+  });
+
+  // ============================================================
+  // turn_end: capture abort signal state. ctx.signal is still alive
+  // during turn_end but is undefined by agent_end (turn already cleaned
+  // up), so we cache it here.
+  // ============================================================
+  pi.on("turn_end", async (_event, ctx) => {
+    if (ctx.signal?.aborted) {
+      _agentAborted = true;
+    }
+  });
+
+  // ============================================================
   // agent_end: call Python script (format + subagent)
   //
   // Guards (in order):
   //   1. PI_SUBAGENT — prevents subagent process from spawning nested subagents
-  //   2. ctx.signal?.aborted — skips extraction when user presses ESC
+  //   2. _agentAborted — skips extraction when user presses ESC (cached in turn_end)
   //   3. Meaningful content check — skips extraction when messages are noise
+  //
+  // Output strategy: capture all child process output; don't inherit stdio
+  // to avoid clashing with Pi's TUI spinner/rendering. Show only a brief
+  // status in Pi's footer. On failure, print error details.
   // ============================================================
   pi.on("agent_end", async (_event, ctx) => {
     const cwd = ctx.cwd;
 
-    // Guard 1: Prevent subagent recursion. The Python script sets PI_SUBAGENT=1
-    // when spawning the child pi process. Without this, agent_end in the child
-    // would trigger another extraction chain → infinite loop.
+    // Guard 1: Prevent subagent recursion
     if (process.env.PI_SUBAGENT === "1") return;
 
-    // Guard 2: Session was aborted (user pressed ESC). The conversation is
-    // incomplete — extracting noise would corrupt memory.
-    if (ctx.signal?.aborted) {
-      console.log("[memory] session aborted, skipping extraction");
+    // Guard 2: Session was aborted (user pressed ESC)
+    if (_agentAborted) {
+      _agentAborted = false;
       return;
     }
 
     const messages = (_event as any)?.messages;
 
-    // Guard 3: No messages or array too small to be meaningful (< 2 = no
-    // complete user-assistant interaction).
+    // Guard 3: Not enough messages for meaningful extraction
     if (!messages || !Array.isArray(messages) || messages.length < 2) return;
 
-    ctx.ui.setStatus("memory", "🧠 🟡");
-    console.log("[memory] Starting extraction...");
+    ctx.ui.setStatus("memory", "🧠 ⏳");
+
     const scriptPath = path.join(HOME, ".pi", "agent", "scripts", "run_extraction.py");
     try {
-      // Use spawn with inherited stdio so user sees real-time progress
-      // instead of a frozen terminal. stdin is piped to send messages JSON.
       const { spawn } = await import("node:child_process");
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), 180000);
-      await new Promise<void>((resolve, reject) => {
+
+      const [stdout, stderr] = await new Promise<[string, string]>((resolve, reject) => {
         const child = spawn("python3", [scriptPath], {
           cwd,
-          stdio: ["pipe", "inherit", "inherit"],
+          stdio: ["pipe", "pipe", "pipe"],
           env: { ...process.env, PI_SUBAGENT: "1" },
           signal: ac.signal,
         });
+
+        const chunks: Buffer[] = [];
+        const errChunks: Buffer[] = [];
+
+        child.stdout!.on("data", (d: Buffer) => chunks.push(d));
+        child.stderr!.on("data", (d: Buffer) => errChunks.push(d));
+
         child.stdin!.end(JSON.stringify(messages));
+
         child.on("exit", (code) => {
           clearTimeout(timer);
-          if (code === 0) resolve();
-          else reject(new Error(`exit code ${code}`));
+          if (code === 0) {
+            resolve([Buffer.concat(chunks).toString("utf-8"), Buffer.concat(errChunks).toString("utf-8")]);
+          } else {
+            const err = Buffer.concat(errChunks).toString("utf-8");
+            reject(new Error(`exit code ${code}: ${err.slice(0, 500)}`));
+          }
         });
         child.on("error", (err) => {
           clearTimeout(timer);
           reject(err);
         });
       });
-      console.log("[memory] ✓ extraction complete");
+
       ctx.ui.setStatus("memory", "🧠 🟢");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
