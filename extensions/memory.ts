@@ -1051,17 +1051,22 @@ export default function (pi: ExtensionAPI) {
       let fileName: string;
       let targetFile: string;
       if (fileParam) {
-        // Guard: if file param equals the category name (e.g. file=decisions + category=decision),
-        // it would create decisions/decisions.md — ignore file param and fall back to flat file.
+        // Guard: prevent nested dirs like events/events/implementation.md
         const categoryDir = `${category}s`;
-        const normalizedFile = fileParam.replace(/\.md$/i, "");
+        let normalizedFile = fileParam.replace(/\.md$/i, "");
+        // Strip leading categoryDir/ or category/ prefix to prevent nesting
+        if (normalizedFile.startsWith(`${categoryDir}/`)) {
+          normalizedFile = normalizedFile.slice(`${categoryDir}/`.length);
+        } else if (normalizedFile.startsWith(`${category}/`)) {
+          normalizedFile = normalizedFile.slice(`${category}/`.length);
+        }
         if (normalizedFile === category || normalizedFile === categoryDir) {
           // File param is redundant — write to flat {category}s.md instead
           fileName = `${category}s.md`;
           targetFile = path.join(targetDir, fileName);
         } else {
-          fileName = `${categoryDir}/${fileParam}.md`;
-          targetFile = path.join(targetDir, categoryDir, `${fileParam}.md`);
+          fileName = `${categoryDir}/${normalizedFile}.md`;
+          targetFile = path.join(targetDir, categoryDir, `${normalizedFile}.md`);
         }
       } else {
         fileName = `${category}s.md`;
