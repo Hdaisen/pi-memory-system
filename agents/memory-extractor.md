@@ -130,6 +130,12 @@ defaultContext: fresh
 3. **无匹配** — 自行创建新目录或新文件写入
 4. **回退** — 不提供 `file` 时写单文件 `{category}s.md`
 
+⚠️ **`file` 参数必须是话题名，不能是分类名本身。**
+- ✅ `category=decision file=architecture` → `decisions/architecture.md`
+- ✅ `category=event file=debugging` → `events/debugging.md`
+- ❌ `category=decision file=decisions` → 会被自动纠正为 `decisions.md`（扁平文件）
+- ❌ `category=event file=events` → 会被自动纠正为 `events.md`（扁平文件）
+
 ### 链接规范
 - 使用 `[[文件名#章节]]` 建立关联，支持深层路径如 `[[events/debugging.md#修复了 X]]`
 - 新增条目时主动链接到已有相关条目

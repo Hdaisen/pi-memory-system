@@ -261,6 +261,40 @@ def write_raw_md(messages: list, turns_dir: Path) -> Path:
     return out_path
 
 
+def write_turn_summary(messages: list, turns_dir: Path):
+    """从 messages 中提取最后一条 assistant 消息 → turn-summary.md"""
+    last_assistant = None
+    for msg in reversed(messages):
+        if msg.get("role") == "assistant":
+            last_assistant = msg
+            break
+
+    if not last_assistant:
+        return
+
+    content = last_assistant.get("content", "")
+    # Extract text blocks only
+    if isinstance(content, list):
+        texts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                texts.append(block.get("text", ""))
+        text = "\n".join(texts).strip()
+    elif isinstance(content, str):
+        text = content.strip()
+    else:
+        return
+
+    if not text:
+        return
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    block = f"# 主脑上一轮回复 ({timestamp})\n\n{text}\n"
+    out_path = turns_dir / "turn-summary.md"
+    out_path.write_text(block, encoding="utf-8")
+    print(f"[extract] ✓ turn-summary.md: {len(text)} chars", file=sys.stderr)
+
+
 # ============================================================
 # 子代理启动
 # ============================================================
@@ -386,7 +420,10 @@ def main():
         # 1. 写 raw.md
         write_raw_md(messages, turns_dir)
 
-        # 2. 启动子代理
+        # 2. 写 turn-summary.md（与 raw.md 同步生成，不依赖子代理）
+        write_turn_summary(messages, turns_dir)
+
+        # 3. 启动子代理
         spawn_subagent(turns_dir)
 
         print("[extract] ✓ extraction complete", file=sys.stderr)
