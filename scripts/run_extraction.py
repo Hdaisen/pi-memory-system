@@ -328,11 +328,15 @@ def spawn_subagent(turns_dir: Path):
             cmd.extend(["--model", model])
             print(f"[extract] Using subagent model: {model}", file=sys.stderr)
 
+    # Use --append-system-prompt with direct file path (no @ prefix)
+    # @ prefix is for positional file args, not for --append-system-prompt
     cmd.extend([
-        f'--append-system-prompt @"{extractor_prompt}"',
-        f'"Read {raw_md} and perform the memory extraction tasks."'
+        f'--append-system-prompt', str(extractor_prompt),
     ])
     full_cmd = " ".join(cmd)
+
+    # The prompt text to send via stdin (pi -p reads from stdin when piped)
+    prompt_text = f"Read {raw_md} and perform the memory extraction tasks."
 
     # 继承环境，但设置 PI_SUBAGENT 防止递归
     env = os.environ.copy()
@@ -341,17 +345,20 @@ def spawn_subagent(turns_dir: Path):
     print("[extract] Starting memory extraction subagent...", file=sys.stderr)
 
     # ── Streaming mode ──
-    # 用 PIPE + 实时行读取替代 capture_output=True，
-    # 用户终端能看到子代理的实时输出
+    # Pipe prompt via stdin (pi -p reads from stdin, command-line prompt arg doesn't work in WSL)
     try:
         proc = subprocess.Popen(
             full_cmd,
             shell=True,
             cwd=turns_dir.parent,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,  # 合并 stderr → stdout
             env=env,
         )
+        # Send prompt via stdin and close
+        proc.stdin.write(prompt_text.encode("utf-8"))
+        proc.stdin.close()
     except Exception as e:
         error_msg = f"Failed to spawn subagent: {e}"
         print(f"[extract] ✗ {error_msg}", file=sys.stderr)
