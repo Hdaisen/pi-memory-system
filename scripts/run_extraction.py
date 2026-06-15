@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 import sys
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -272,6 +273,7 @@ def spawn_subagent(turns_dir: Path):
     """
     raw_md = turns_dir / "raw.md"
     extractor_prompt = AGENTS_DIR / "memory-extractor.md"
+    error_log = turns_dir / "extraction-error.log"
 
     if not raw_md.exists():
         print(f"[extract] ✗ raw.md not found, skipping subagent", file=sys.stderr)
@@ -296,14 +298,20 @@ def spawn_subagent(turns_dir: Path):
     # ── Streaming mode ──
     # 用 PIPE + 实时行读取替代 capture_output=True，
     # 用户终端能看到子代理的实时输出
-    proc = subprocess.Popen(
-        full_cmd,
-        shell=True,
-        cwd=turns_dir.parent,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,  # 合并 stderr → stdout
-        env=env,
-    )
+    try:
+        proc = subprocess.Popen(
+            full_cmd,
+            shell=True,
+            cwd=turns_dir.parent,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # 合并 stderr → stdout
+            env=env,
+        )
+    except Exception as e:
+        error_msg = f"Failed to spawn subagent: {e}"
+        print(f"[extract] ✗ {error_msg}", file=sys.stderr)
+        error_log.write_text(f"# Extraction Error — {datetime.now(timezone.utc).isoformat()}\n\n{error_msg}\n", encoding="utf-8")
+        raise RuntimeError(error_msg)
 
     # 逐行读取并输出，bytes → UTF-8 避免 GBK 崩溃
     assert proc.stdout is not None
@@ -312,12 +320,25 @@ def spawn_subagent(turns_dir: Path):
         if line:
             print(f"  {line}", file=sys.stderr)
 
-    proc.wait(timeout=120)
+    try:
+        proc.wait(timeout=120)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        error_msg = "Subagent timed out after 120s"
+        print(f"[extract] ✗ {error_msg}", file=sys.stderr)
+        error_log.write_text(f"# Extraction Error — {datetime.now(timezone.utc).isoformat()}\n\n{error_msg}\n", encoding="utf-8")
+        raise RuntimeError(error_msg)
 
     if proc.returncode == 0:
+        # Success — clear any old error log
+        if error_log.exists():
+            error_log.unlink()
         print(f"[extract] ✓ subagent: done", file=sys.stderr)
     else:
-        raise RuntimeError(f"subagent failed (exit={proc.returncode})")
+        error_msg = f"subagent failed (exit={proc.returncode})"
+        print(f"[extract] ✗ {error_msg}", file=sys.stderr)
+        error_log.write_text(f"# Extraction Error — {datetime.now(timezone.utc).isoformat()}\n\n{error_msg}\n", encoding="utf-8")
+        raise RuntimeError(error_msg)
 
 
 # ============================================================
@@ -350,13 +371,27 @@ def main():
     proj_name = os.path.basename(cwd)
     turns_dir = PROJECTS_DIR / proj_name / "turns"
 
-    # 1. 写 raw.md
-    write_raw_md(messages, turns_dir)
+    try:
+        # 1. 写 raw.md
+        write_raw_md(messages, turns_dir)
 
-    # 2. 启动子代理
-    spawn_subagent(turns_dir)
+        # 2. 启动子代理
+        spawn_subagent(turns_dir)
 
-    print("[extract] ✓ extraction complete", file=sys.stderr)
+        print("[extract] ✓ extraction complete", file=sys.stderr)
+    except Exception as e:
+        # Log any unhandled error to file
+        error_log = turns_dir / "extraction-error.log"
+        error_msg = f"Unhandled error: {e}\n\n{traceback.format_exc()}"
+        print(f"[extract] ✗ {error_msg}", file=sys.stderr)
+        try:
+            error_log.write_text(
+                f"# Extraction Error — {datetime.now(timezone.utc).isoformat()}\n\n{error_msg}\n",
+                encoding="utf-8"
+            )
+        except:
+            pass
+        sys.exit(1)
 
 
 if __name__ == "__main__":
