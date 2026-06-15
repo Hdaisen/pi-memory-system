@@ -58,13 +58,15 @@
 ┌──────────────────────────────────────────────────┐
 │  agent_end (extension → Python → subagent)        │
 │                                                    │
-│  1. Dump messages → python3 run_extraction.py     │
+│  1. Write turn-summary.md (verbatim last response) │
+│  2. Dump messages → python3 run_extraction.py     │
 │     ├─ Format → turns/raw.md (filter system/read) │
 │     └─ Spawn pi -p (memory-extractor)             │
 │        ├─ Write essence.md (next turn's handoff)  │
 │        ├─ Update notebook.md                      │
 │        └─ Call remember() for long-term memory    │
-│  2. Status: 🧠 🟢 / 🟡 / 🔴                       │
+│  3. On error → log to turns/extraction-error.log  │
+│  4. Status: 🧠 🟢 / 🟡 / ⏳ / 🔴                   │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -74,6 +76,9 @@
 |:------|:-----|:-----------|
 | 🏛️ **Core Prompt** | `~/.pi/agent/memory/core-prompt.md` | Extension (auto) |
 | 📓 **Session Notebook** | `~/.pi/agent/memory/projects/<name>/notebook.md` | Subagent (auto) |
+| 🔄 **Turn Summary** | `~/.pi/agent/memory/projects/<name>/turns/turn-summary.md` | Extension (auto) |
+| 🔗 **Essence** | `~/.pi/agent/memory/projects/<name>/turns/essence.md` | Subagent (auto) |
+| 📝 **Raw Archive** | `~/.pi/agent/memory/projects/<name>/turns/raw.md` | Python (auto) |
 | 🗄️ **Long-term Memory** | `~/.pi/agent/memory/projects/<name>/memories/` (project)<br>`~/.pi/agent/memory/personal/` (global) | Subagent via `remember` |
 
 ### Key Design: Subagent Distillation
@@ -181,6 +186,30 @@ memories/
 | `project` | `~/.pi/agent/memory/projects/<name>/memories/` | Only useful in this project |
 | `global` | `~/.pi/agent/memory/personal/` | Still useful in other projects |
 
+## Status Indicators
+
+The extension shows memory system status in Pi's footer:
+
+| Status | Meaning |
+|:-------|:--------|
+| `🧠 🟢` | Memory system healthy |
+| `🧠 🟡` | Context trimming active |
+| `🧠 ⏳` | Extraction running |
+| `🧠 🔴` | Extraction failed (check `turns/extraction-error.log`) |
+
+### Debugging Extraction Errors
+
+When you see `🧠 🔴`, check the error log:
+
+```bash
+cat ~/.pi/agent/memory/projects/<name>/turns/extraction-error.log
+```
+
+Common causes:
+- `pi` not found in PATH (subagent spawn failed)
+- Python script timeout (>180s)
+- Subagent process crash
+
 ## Project Structure
 
 ```
@@ -193,7 +222,6 @@ pi-memory-system/
 │   ├── run_extraction.py    # Main pipeline (format + subagent launch)
 │   └── write_raw.py         # JSON→MD formatter (stdin/file/JSONL)
 ├── templates/               # Template files
-├── example/                 # Example project
 ├── core-prompt.md           # Reference core prompt
 ├── rules.md                 # Behavioral rules
 ├── LICENSE                  # MIT

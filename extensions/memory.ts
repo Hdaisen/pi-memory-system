@@ -737,6 +737,10 @@ export default function (pi: ExtensionAPI) {
   // before_agent_start: inject memory context into system prompt
   // ============================================================
   pi.on("before_agent_start", async (event, ctx) => {
+    // Guard: subagents have their own prompts (e.g. memory-extractor.md),
+    // do NOT inject core-prompt + notebook + turn-summary into them.
+    if (process.env.PI_SUBAGENT === "1") return;
+
     const cwd = ctx.cwd;
 
     // 0. Ensure project directory and notebook exist
@@ -901,25 +905,37 @@ export default function (pi: ExtensionAPI) {
         });
       });
 
-      // ── Write turn-summary.md (main brain's last response, injected next turn) ──
-      // This file is written by the extension, NOT by the subagent.
-      // essence.md is exclusively for the subagent's distilled output.
-      const lastAssistant = [...messages].reverse().find((m: any) => m.role === "assistant");
-      if (lastAssistant) {
-        const text = extractAssistantText(lastAssistant.content);
-        if (text) {
-          const summaryPath = path.join(PATHS.turnsDir(cwd), "turn-summary.md");
-          const timestamp = new Date().toISOString().replace("T", " ").slice(0, 19);
-          const block = `# 主脑上一轮回复 (${timestamp})\n\n${text.trim()}\n`;
-          fs.writeFileSync(summaryPath, block, "utf-8");
-        }
-      }
-
       ctx.ui.setStatus("memory", "🧠 🟢");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      const stack = e instanceof Error ? e.stack : "";
       console.warn("[memory] extraction failed:", msg);
+
+      // Write error to file for debugging
+      try {
+        const errorLog = path.join(PATHS.turnsDir(cwd), "extraction-error.log");
+        const timestamp = new Date().toISOString().replace("T", " ").slice(0, 19);
+        const errorContent = `# Extraction Error — ${timestamp}\n\n${msg}\n${stack ? `\nStack:\n${stack}` : ""}\n`;
+        fs.writeFileSync(errorLog, errorContent, "utf-8");
+      } catch { /* best effort */ }
+
       ctx.ui.setStatus("memory", "🧠 🔴");
+    }
+
+    // ── Write turn-summary.md (main brain's last response, injected next turn) ──
+    // This file is written by the extension, NOT by the subagent.
+    // essence.md is exclusively for the subagent's distilled output.
+    // NOTE: Moved outside try-catch so turn-summary is ALWAYS written,
+    // even if python extraction script fails.
+    const lastAssistant = [...messages].reverse().find((m: any) => m.role === "assistant");
+    if (lastAssistant) {
+      const text = extractAssistantText(lastAssistant.content);
+      if (text) {
+        const summaryPath = path.join(PATHS.turnsDir(cwd), "turn-summary.md");
+        const timestamp = new Date().toISOString().replace("T", " ").slice(0, 19);
+        const block = `# 主脑上一轮回复 (${timestamp})\n\n${text.trim()}\n`;
+        fs.writeFileSync(summaryPath, block, "utf-8");
+      }
     }
 
     updateTaskWidget(cwd, ctx);

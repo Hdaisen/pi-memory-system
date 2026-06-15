@@ -33,7 +33,8 @@
 用户发送消息 → before_agent_start 注入上下文
   ├─ core-prompt + rules
   ├─ notebook.md（子代理维护）
-  ├─ essence.md（上轮接力棒）
+  ├─ turn-summary.md（主脑上轮回复）
+  ├─ essence.md（子代理提炼的接力棒）
   └─ 关联记忆（[[Wiki-links]]）
 
 → context 清除所有历史，仅保留 system + 当前用户消息
@@ -41,13 +42,15 @@
 → 主 LLM 思考 & 回复（不做记忆维护）
 
 → agent_end（扩展 → Python → 子代理）
-  1. 管道传 JSON → python3 run_extraction.py
+  1. 写 turn-summary.md（主脑上轮逐字回复）
+  2. 管道传 JSON → python3 run_extraction.py
      ├─ 格式化 → turns/raw.md（过滤 system/read）
      └─ spawn pi -p (memory-extractor)
         ├─ 写 essence.md（下轮接力棒）
         ├─ 更新 notebook.md
         └─ 调 remember() → 长期记忆
-  2. 状态栏：🧠 🟢 / 🟡 / 🔴
+  3. 异常时 → 写入 turns/extraction-error.log
+  4. 状态栏：🧠 🟢 / 🟡 / ⏳ / 🔴
 ```
 
 ### 三层架构
@@ -56,6 +59,9 @@
 |:------|:-----|:-----------|
 | 🏛️ **核心提示词** | `~/.pi/agent/memory/core-prompt.md` | 扩展自动维护 |
 | 📓 **会话小本本** | `~/.pi/agent/memory/projects/<name>/notebook.md` | 子代理自动维护 |
+| 🔄 **轮次摘要** | `~/.pi/agent/memory/projects/<name>/turns/turn-summary.md` | 扩展自动维护 |
+| 🔗 **接力棒** | `~/.pi/agent/memory/projects/<name>/turns/essence.md` | 子代理自动维护 |
+| 📝 **原始存档** | `~/.pi/agent/memory/projects/<name>/turns/raw.md` | Python 自动维护 |
 | 🗄️ **长期记忆** | `~/.pi/agent/memory/projects/<name>/memories/`（项目）<br>`~/.pi/agent/memory/personal/`（全局） | 子代理通过 `remember` 写入 |
 
 ### 核心设计：子代理蒸馏
@@ -87,6 +93,30 @@
 | `🗑️ forget` | ⚠️ 删除。优先用 supersede。 |
 | `📓 notebook` | 查看/更新会话小本本 |
 | `📊 memory_status` | 查看记忆系统状态概览 |
+
+## 状态指示器
+
+扩展在 Pi 底部显示记忆系统状态：
+
+| 状态 | 含义 |
+|:-------|:--------|
+| `🧠 🟢` | 记忆系统正常 |
+| `🧠 🟡` | 上下文裁剪中 |
+| `🧠 ⏳` | 提取运行中 |
+| `🧠 🔴` | 提取失败（查看 `turns/extraction-error.log`） |
+
+### 调试提取错误
+
+当看到 `🧠 🔴` 时，检查错误日志：
+
+```bash
+cat ~/.pi/agent/memory/projects/<name>/turns/extraction-error.log
+```
+
+常见原因：
+- `pi` 不在 PATH 中（子代理启动失败）
+- Python 脚本超时（>180s）
+- 子代理进程崩溃
 
 ## 快速开始
 
@@ -175,7 +205,6 @@ pi-memory-system/
 │   ├── run_extraction.py    # 主管线（格式化 + 子代理启动）
 │   └── write_raw.py         # JSON→MD 格式化（stdin/文件/JSONL）
 ├── templates/               # 模板文件
-├── example/                 # 示例项目
 ├── core-prompt.md           # 参考核心提示词
 ├── rules.md                 # 行为规则
 ├── LICENSE                  # MIT
