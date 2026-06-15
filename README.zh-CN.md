@@ -83,7 +83,7 @@
 
 所有用户/助手/工具消息由 `context` 事件自动清除。
 
-## 工具
+## 工具与命令
 
 | 工具 | 说明 |
 |:-----|:-------------|
@@ -93,6 +93,7 @@
 | `🗑️ forget` | ⚠️ 删除。优先用 supersede。 |
 | `📓 notebook` | 查看/更新会话小本本 |
 | `📊 memory_status` | 查看记忆系统状态概览 |
+| `/subagent-model` | 选择子代理使用的模型 |
 
 ## 状态指示器
 
@@ -193,6 +194,18 @@ memories/
 | `project`（默认） | `~/.pi/agent/memory/projects/<name>/memories/` | 仅本项目有用 |
 | `global` | `~/.pi/agent/memory/personal/` | 跨项目通用 |
 
+## 子代理模型
+
+默认情况下，子代理使用 Pi 当前的默认模型。使用 `/subagent-model` 可以选择更轻量的模型（子代理只做知识蒸馏，不写代码）。
+
+```bash
+# 在 Pi 终端中：
+/subagent-model
+# → 从 mimo-v2.5, claude-sonnet, gpt-4o, gemini-flash 等中选择
+```
+
+选择保存在 `~/.pi/agent/memory/subagent-model.txt`。删除文件或选择 `(default)` 可重置。
+
 ## 项目结构
 
 ```
@@ -202,8 +215,7 @@ pi-memory-system/
 ├── agents/
 │   └── memory-extractor.md  # 子代理定义
 ├── scripts/
-│   ├── run_extraction.py    # 主管线（格式化 + 子代理启动）
-│   └── write_raw.py         # JSON→MD 格式化（stdin/文件/JSONL）
+│   └── run_extraction.py    # 主管线（格式化 + 子代理启动）
 ├── templates/               # 模板文件
 ├── core-prompt.md           # 参考核心提示词
 ├── rules.md                 # 行为规则

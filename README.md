@@ -100,7 +100,7 @@ The main LLM receives **zero raw conversation history**. Each turn:
 
 Everything else is stripped by the `context` event handler (mid-turn safe).
 
-## Tools (6)
+## Tools & Commands
 
 | Tool | Description |
 |:-----|:-------------|
@@ -110,6 +110,7 @@ Everything else is stripped by the `context` event handler (mid-turn safe).
 | `🗑️ forget` | ⚠️ Delete. Prefer supersede. |
 | `📓 notebook` | View/update the session notebook |
 | `📊 memory_status` | View memory file status overview |
+| `/subagent-model` | Pick model for memory-extractor subagent |
 
 ## Quick Start
 
@@ -210,6 +211,18 @@ Common causes:
 - Python script timeout (>180s)
 - Subagent process crash
 
+## Subagent Model
+
+By default, the subagent uses Pi's current default model. Use `/subagent-model` to pick a lighter model (the subagent only does knowledge distillation, not code generation).
+
+```bash
+# In Pi terminal:
+/subagent-model
+# → select from: mimo-v2.5, claude-sonnet, gpt-4o, gemini-flash, etc.
+```
+
+The selection is persisted in `~/.pi/agent/memory/subagent-model.txt`. Delete the file or pick `(default)` to reset.
+
 ## Project Structure
 
 ```
@@ -219,8 +232,7 @@ pi-memory-system/
 ├── agents/
 │   └── memory-extractor.md  # Subagent definition
 ├── scripts/
-│   ├── run_extraction.py    # Main pipeline (format + subagent launch)
-│   └── write_raw.py         # JSON→MD formatter (stdin/file/JSONL)
+│   └── run_extraction.py    # Main pipeline (format + subagent launch)
 ├── templates/               # Template files
 ├── core-prompt.md           # Reference core prompt
 ├── rules.md                 # Behavioral rules

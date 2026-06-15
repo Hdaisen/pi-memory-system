@@ -32,6 +32,7 @@ AGENT_DIR = HOME / ".pi" / "agent"
 SCRIPTS_DIR = AGENT_DIR / "scripts"
 PROJECTS_DIR = AGENT_DIR / "memory" / "projects"
 AGENTS_DIR = AGENT_DIR / "agents"
+SUBAGENT_MODEL_FILE = AGENT_DIR / "memory" / "subagent-model.txt"
 
 
 # ============================================================
@@ -284,9 +285,19 @@ def spawn_subagent(turns_dir: Path):
         "-p",
         "--no-session",
         "--tools", "read,write,edit,remember,recall,notebook,forget,supersede",
+    ]
+
+    # Read subagent model from config file (set via /subagent-model command)
+    if SUBAGENT_MODEL_FILE.exists():
+        model = SUBAGENT_MODEL_FILE.read_text(encoding="utf-8").strip()
+        if model:
+            cmd.extend(["--model", model])
+            print(f"[extract] Using subagent model: {model}", file=sys.stderr)
+
+    cmd.extend([
         f'--append-system-prompt @"{extractor_prompt}"',
         f'"Read {raw_md} and perform the memory extraction tasks."'
-    ]
+    ])
     full_cmd = " ".join(cmd)
 
     # 继承环境，但设置 PI_SUBAGENT 防止递归
@@ -321,10 +332,10 @@ def spawn_subagent(turns_dir: Path):
             print(f"  {line}", file=sys.stderr)
 
     try:
-        proc.wait(timeout=120)
+        proc.wait(timeout=360)  # 最长等 6 分钟，防止子代理卡死导致僵尸进程
     except subprocess.TimeoutExpired:
         proc.kill()
-        error_msg = "Subagent timed out after 120s"
+        error_msg = "Subagent timed out after 360s, killed process"
         print(f"[extract] ✗ {error_msg}", file=sys.stderr)
         error_log.write_text(f"# Extraction Error — {datetime.now(timezone.utc).isoformat()}\n\n{error_msg}\n", encoding="utf-8")
         raise RuntimeError(error_msg)
