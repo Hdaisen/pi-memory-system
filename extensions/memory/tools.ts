@@ -251,10 +251,11 @@ ${params.content}${relatedLine}
               sectionLines.push(line);
               const lower = line.toLowerCase();
               if (keywords.length === 0 || keywords.some((k) => lower.includes(k))) {
-                // Apply confidence filter if set
+                // Apply confidence filter — only match metadata lines, not body content
                 const matchesConfidence =
                   !confidenceFilter ||
-                  lower.includes(`[${confidenceFilter}]`);
+                  (lower.includes(`[${confidenceFilter}]`) &&
+                   (lower.includes("置信度") || lower.includes("confidence")));
                 if (matchesConfidence) {
                   matchCount++;
                 }
@@ -360,11 +361,11 @@ ${params.content}${relatedLine}
       }
 
       const sections = content.split(/(?=^## )/m);
-      const filtered = sections.filter(
-        (s) =>
-          !s.trim().startsWith(`## ${section}`) &&
-          !s.trim().startsWith(`## ${section}\n`),
-      );
+      const sectionHeader = `## ${section}`;
+      const filtered = sections.filter((s) => {
+        const firstLine = s.trim().split(/\r?\n/)[0];
+        return firstLine !== sectionHeader;
+      });
 
       if (filtered.length === sections.length) {
         return {
@@ -457,7 +458,7 @@ ${params.content}${relatedLine}
 
       // Find the section in the file
       const sectionRegex = new RegExp(
-        `(^## ${section.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*?)(?=\\n## |\\z)`,
+        `(^## ${section.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*?)(?=\\n## |$)`,
         "m",
       );
 
@@ -555,7 +556,7 @@ ${params.content}${relatedLine}
             content: [
               {
                 type: "text",
-                text: `⚠️ Section "${section}" not found. Available sections: Current Task, Active Context, Key Decisions, Todos, Project Info, Related Projects`,
+                text: `⚠️ Section "${section}" not found. Available sections: 当前任务, 本阶段完成, 待办, 跨轮约束, 项目常识`,
               },
             ],
             details: {},
