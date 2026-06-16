@@ -80,7 +80,12 @@ if (-not $SkipExtension) {
     $src = Join-Path $ScriptRoot "extensions" "memory.ts"
     $dst = Join-Path $extDir "memory.ts"
     Copy-Item $src $dst -Force
-    Write-Host "  ✅ Installed extension to ${extDir}\memory.ts" -ForegroundColor Green
+    # Copy module directory
+    $moduleSrc = Join-Path $ScriptRoot "extensions" "memory"
+    $moduleDst = Join-Path $extDir "memory"
+    if (Test-Path $moduleDst) { Remove-Item $moduleDst -Recurse -Force }
+    Copy-Item $moduleSrc $moduleDst -Recurse -Force
+    Write-Host "  ✅ Installed extension to ${extDir}\memory.ts + memory\" -ForegroundColor Green
 } else {
     Write-Host "[3/4] Skipping extension installation (--SkipExtension)" -ForegroundColor Gray
 }

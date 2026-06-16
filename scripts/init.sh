@@ -66,7 +66,9 @@ if [ "$SKIP_EXTENSION" = false ]; then
     ext_dir="$HOME_DIR/.pi/agent/extensions"
     mkdir -p "$ext_dir"
     cp "$SCRIPT_DIR/extensions/memory.ts" "$ext_dir/memory.ts"
-    echo "  ✅ Installed extension to $ext_dir/memory.ts"
+    rm -rf "$ext_dir/memory"
+    cp -r "$SCRIPT_DIR/extensions/memory" "$ext_dir/memory"
+    echo "  ✅ Installed extension to $ext_dir/memory.ts + memory/"
 else
     echo "[3/4] Skipping extension installation (--skip-extension)"
 fi
