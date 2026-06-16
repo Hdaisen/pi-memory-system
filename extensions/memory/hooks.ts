@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { spawn, type ChildProcess } from "node:child_process";
 import { HOME, PATHS } from "./config";
 import { safeRead, extractLinks, readLinkedContent } from "./utils";
 import { isBinaryFile, convertWithMarkitdown } from "./markitdown";
@@ -10,6 +11,249 @@ import { ensureProjectDir, refreshIndex, updateTaskWidget } from "./memory-ops";
  *  ctx.signal is undefined during agent_end (turn already cleaned up),
  *  so we track abort state manually via turn_end / tool_call events. */
 let _agentAborted = false;
+
+// ============================================================
+// Extraction progress UI
+// ============================================================
+
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/** Parse a stderr line from run_extraction.py and return a human-readable step label. */
+function parseStep(line: string): string | null {
+  if (line.includes("raw.md:") || line.includes("Writing raw.md")) return "Formatting raw.md...";
+  if (line.includes("turn-summary.md:") || line.includes("Writing turn-summary")) return "Extracting turn summary...";
+  if (line.includes("Starting memory extraction subagent")) return "Starting memory subagent...";
+  if (line.includes("subagent: done")) return "Subagent finished";
+  if (line.includes("extraction complete")) return "Extraction complete ✓";
+  if (line.includes("subagent failed") || line.includes("timed out")) return "Subagent failed ✗";
+  return null;
+}
+
+/**
+ * Rich progress UI via ctx.ui.custom().
+ * Shows a bordered panel with spinner, current step, and scrolling log lines.
+ * Returns a promise that resolves when extraction finishes or is cancelled.
+ */
+function runExtractionWithProgress(
+  ctx: any,
+  scriptPath: string,
+  messages: any[],
+  cwd: string,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (typeof ctx.ui.custom !== "function") {
+      throw new Error("ctx.ui.custom is not a function");
+    }
+
+    ctx.ui.custom<void>((tui: any, theme: any, _kb: any, done: () => void) => {
+      let step = "Initializing...";
+      let frame = 0;
+      const logLines: string[] = [];
+      let childProc: ChildProcess | null = null;
+      let settled = false;
+      let animTimer: ReturnType<typeof setInterval> | null = null;
+      let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const cleanup = () => {
+        if (animTimer) { clearInterval(animTimer); animTimer = null; }
+        if (timeoutTimer) { clearTimeout(timeoutTimer); timeoutTimer = null; }
+      };
+
+      const finish = (success: boolean) => {
+        if (settled) return;
+        settled = true;
+        step = success ? "Extraction complete ✓" : "Extraction failed ✗";
+        tui.requestRender();
+        setTimeout(() => { cleanup(); done(); }, success ? 800 : 2000);
+      };
+
+      const component = {
+        render(width: number): string[] {
+          const lines: string[] = [];
+          const w = Math.min(width, 72);
+
+          // Top border
+          lines.push(theme.fg("accent", "╭" + "─".repeat(w - 2) + "╮"));
+
+          // Title with spinner
+          const spinner = SPINNER_FRAMES[frame % SPINNER_FRAMES.length];
+          const title = ` ${spinner} Memory Extraction`;
+          const padded = title + " ".repeat(Math.max(0, w - 2 - title.length));
+          lines.push(theme.fg("accent", "│") + theme.fg("text", padded) + theme.fg("accent", "│"));
+
+          // Separator
+          lines.push(theme.fg("accent", "├" + "─".repeat(w - 2) + "┤"));
+
+          // Current step
+          const stepLine = `  → ${step}`;
+          const stepPadded = stepLine + " ".repeat(Math.max(0, w - 2 - stepLine.length));
+          lines.push(theme.fg("accent", "│") + theme.fg("success", stepPadded) + theme.fg("accent", "│"));
+
+          // Empty line
+          lines.push(theme.fg("accent", "│") + " ".repeat(w - 2) + theme.fg("accent", "│"));
+
+          // Log lines (show last 8)
+          const visible = logLines.slice(-8);
+          for (const log of visible) {
+            const truncated = log.length > w - 4 ? log.slice(0, w - 7) + "..." : log;
+            const lp = `  ${truncated}` + " ".repeat(Math.max(0, w - 2 - truncated.length - 2));
+            lines.push(theme.fg("accent", "│") + theme.fg("dim", lp) + theme.fg("accent", "│"));
+          }
+
+          // Fill remaining space (target ~14 lines total)
+          const remaining = Math.max(0, 8 - visible.length);
+          for (let i = 0; i < remaining; i++) {
+            lines.push(theme.fg("accent", "│") + " ".repeat(w - 2) + theme.fg("accent", "│"));
+          }
+
+          // Bottom border with hint
+          const hint = " ESC: cancel ";
+          const bottomPad = w - 2 - hint.length;
+          lines.push(
+            theme.fg("accent", "├") +
+            theme.fg("dim", hint) +
+            theme.fg("accent", "─".repeat(Math.max(0, bottomPad)) + "╮"),
+          );
+          lines.push(theme.fg("accent", "╰" + "─".repeat(w - 2) + "╯"));
+
+          return lines;
+        },
+
+        handleInput(data: string): void {
+          if (data === "escape" || data === "\x1b") {
+            if (childProc && !settled) {
+              childProc.kill();
+              finish(false);
+            }
+          }
+        },
+
+        invalidate(): void {},
+      };
+
+      // Spawn the extraction script
+      const ac = new AbortController();
+      timeoutTimer = setTimeout(() => {
+        if (!settled) { childProc?.kill(); finish(false); }
+      }, 180000);
+
+      childProc = spawn("python3", [scriptPath], {
+        cwd,
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, PI_SUBAGENT: "1" },
+        signal: ac.signal,
+      });
+
+      childProc.stdin!.end(JSON.stringify(messages));
+
+      // Parse stderr for progress updates
+      let stderrBuf = "";
+      childProc.stderr!.on("data", (d: Buffer) => {
+        stderrBuf += d.toString("utf-8");
+        const parts = stderrBuf.split("\n");
+        stderrBuf = parts.pop()!;
+
+        for (const line of parts) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          const newStep = parseStep(trimmed);
+          if (newStep) step = newStep;
+          logLines.push(trimmed);
+        }
+        tui.requestRender();
+      });
+
+      childProc.on("exit", (code) => {
+        if (stderrBuf.trim()) logLines.push(stderrBuf.trim());
+        finish(code === 0);
+      });
+
+      childProc.on("error", (err) => {
+        logLines.push(`Error: ${err.message}`);
+        finish(false);
+      });
+
+      // Animation timer for spinner
+      animTimer = setInterval(() => { frame++; tui.requestRender(); }, 80);
+
+      return component;
+    }).then(() => resolve()).catch(reject);
+  });
+}
+
+/**
+ * Simple fallback: update footer status bar with progress info.
+ * Used when ctx.ui.custom() is not available (e.g., non-TUI mode).
+ */
+async function runExtractionSimple(
+  ctx: any,
+  scriptPath: string,
+  messages: any[],
+  cwd: string,
+): Promise<void> {
+  ctx.ui.setStatus("memory", "🧠 ⏳ extracting...");
+
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 180000);
+
+    const stderr = await new Promise<string>((resolve, reject) => {
+      const child = spawn("python3", [scriptPath], {
+        cwd,
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, PI_SUBAGENT: "1" },
+        signal: ac.signal,
+      });
+
+      const errChunks: Buffer[] = [];
+
+      child.stderr!.on("data", (d: Buffer) => {
+        errChunks.push(d);
+        // Update status with latest progress
+        const line = d.toString("utf-8").trim();
+        const step = parseStep(line);
+        if (step) {
+          ctx.ui.setStatus("memory", `🧠 ⏳ ${step}`);
+        }
+      });
+
+      child.stdin!.end(JSON.stringify(messages));
+
+      child.on("exit", (code) => {
+        clearTimeout(timer);
+        const err = Buffer.concat(errChunks).toString("utf-8");
+        if (code === 0) {
+          resolve(err);
+        } else {
+          reject(new Error(`exit code ${code}: ${err.slice(0, 500)}`));
+        }
+      });
+      child.on("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+
+    ctx.ui.setStatus("memory", "🧠 🟢");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const stack = e instanceof Error ? e.stack : "";
+    console.warn("[memory] extraction failed:", msg);
+
+    try {
+      const errorLog = path.join(PATHS.turnsDir(cwd), "extraction-error.log");
+      const timestamp = new Date().toISOString().replace("T", " ").slice(0, 19);
+      const errorContent = `# Extraction Error — ${timestamp}\n\n${msg}\n${stack ? `\nStack:\n${stack}` : ""}\n`;
+      fs.writeFileSync(errorLog, errorContent, "utf-8");
+    } catch { /* best effort */ }
+
+    ctx.ui.setStatus("memory", "🧠 🔴");
+  }
+}
+
+// ============================================================
+// Hooks registration
+// ============================================================
 
 export function registerHooks(pi: ExtensionAPI): void {
   // ============================================================
@@ -133,9 +377,9 @@ export function registerHooks(pi: ExtensionAPI): void {
   //   2. _agentAborted — skips extraction when user presses ESC (cached in turn_end)
   //   3. Meaningful content check — skips extraction when messages are noise
   //
-  // Output strategy: capture all child process output; don't inherit stdio
-  // to avoid clashing with Pi's TUI spinner/rendering. Show only a brief
-  // status in Pi's footer. On failure, print error details.
+  // UI strategy:
+  //   - Try ctx.ui.custom() to show a live progress panel with spinner + log
+  //   - Fall back to ctx.ui.setStatus() if custom UI is unavailable
   // ============================================================
   pi.on("agent_end", async (_event, ctx) => {
     const cwd = ctx.cwd;
@@ -154,63 +398,25 @@ export function registerHooks(pi: ExtensionAPI): void {
     // Guard 3: Not enough messages for meaningful extraction
     if (!messages || !Array.isArray(messages) || messages.length < 2) return;
 
-    ctx.ui.setStatus("memory", "🧠 ⏳");
-
     const scriptPath = path.join(HOME, ".pi", "agent", "scripts", "run_extraction.py");
+
+    // Try rich progress UI first; fall back to status bar on failure
     try {
-      const { spawn } = await import("node:child_process");
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), 180000);
-
-      const [stdout, stderr] = await new Promise<[string, string]>((resolve, reject) => {
-        const child = spawn("python3", [scriptPath], {
-          cwd,
-          stdio: ["pipe", "pipe", "pipe"],
-          env: { ...process.env, PI_SUBAGENT: "1" },
-          signal: ac.signal,
-        });
-
-        const chunks: Buffer[] = [];
-        const errChunks: Buffer[] = [];
-
-        child.stdout!.on("data", (d: Buffer) => chunks.push(d));
-        child.stderr!.on("data", (d: Buffer) => errChunks.push(d));
-
-        child.stdin!.end(JSON.stringify(messages));
-
-        child.on("exit", (code) => {
-          clearTimeout(timer);
-          if (code === 0) {
-            resolve([Buffer.concat(chunks).toString("utf-8"), Buffer.concat(errChunks).toString("utf-8")]);
-          } else {
-            const err = Buffer.concat(errChunks).toString("utf-8");
-            reject(new Error(`exit code ${code}: ${err.slice(0, 500)}`));
-          }
-        });
-        child.on("error", (err) => {
-          clearTimeout(timer);
-          reject(err);
-        });
-      });
-
-      ctx.ui.setStatus("memory", "🧠 🟢");
+      await runExtractionWithProgress(ctx, scriptPath, messages, cwd);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      const stack = e instanceof Error ? e.stack : "";
-      console.warn("[memory] extraction failed:", msg);
-
-      // Write error to file for debugging
-      try {
-        const errorLog = path.join(PATHS.turnsDir(cwd), "extraction-error.log");
-        const timestamp = new Date().toISOString().replace("T", " ").slice(0, 19);
-        const errorContent = `# Extraction Error — ${timestamp}\n\n${msg}\n${stack ? `\nStack:\n${stack}` : ""}\n`;
-        fs.writeFileSync(errorLog, errorContent, "utf-8");
-      } catch { /* best effort */ }
-
-      ctx.ui.setStatus("memory", "🧠 🔴");
+      // If ctx.ui.custom is not available, use simple fallback
+      if (msg.includes("not a function") || msg.includes("custom")) {
+        await runExtractionSimple(ctx, scriptPath, messages, cwd);
+      } else {
+        // Real error from the extraction — log it
+        console.warn("[memory] extraction UI error:", msg);
+        // Still try simple fallback
+        try {
+          await runExtractionSimple(ctx, scriptPath, messages, cwd);
+        } catch { /* already logged */ }
+      }
     }
-
-    // turn-summary.md is now generated by run_extraction.py alongside raw.md
 
     updateTaskWidget(cwd, ctx);
   });
