@@ -251,10 +251,11 @@ def write_raw_md(messages: list, turns_dir: Path) -> Path:
     ensure_dir(raw_dir)
 
     timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    md = f"# Turn — {timestamp}\n\n"
+    parts = [f"# Turn — {timestamp}\n\n"]
     for msg in messages:
-        md += format_message(msg, raw_dir)
+        parts.append(format_message(msg, raw_dir))
 
+    md = "".join(parts)
     out_path = turns_dir / "raw.md"
     out_path.write_text(md, encoding="utf-8")
     print(f"[extract] ✓ raw.md: {len(messages)} msgs → {out_path} ({len(md)} bytes)", file=sys.stderr)
@@ -424,13 +425,13 @@ def main():
     turns_dir = PROJECTS_DIR / proj_name / "turns"
 
     try:
-        # 1. 写 raw.md
-        write_raw_md(messages, turns_dir)
+        # 1+2. 并行写 raw.md 和 turn-summary.md（无依赖，写不同文件）
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            pool.submit(write_raw_md, messages, turns_dir)
+            pool.submit(write_turn_summary, messages, turns_dir)
 
-        # 2. 写 turn-summary.md（与 raw.md 同步生成，不依赖子代理）
-        write_turn_summary(messages, turns_dir)
-
-        # 3. 启动子代理
+        # 3. 启动子代理（依赖 raw.md 已存在）
         spawn_subagent(turns_dir)
 
         print("[extract] ✓ extraction complete", file=sys.stderr)

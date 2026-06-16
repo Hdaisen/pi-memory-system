@@ -2,12 +2,17 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
 
+let _wslSymlinkChecked = false;
+
 /**
  * Create a WSL symlink from ~/.pi/agent/memory to the Windows path
  * when the WSL username differs from the Windows username.
  * This ensures bash commands (which run in WSL) can find memory files.
+ * Cached: only runs execSync once per process.
  */
 export function ensureWslSymlink(): void {
+  if (_wslSymlinkChecked) return;
+  _wslSymlinkChecked = true;
   try {
     // Check if WSL is available
     const wslPath = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "wsl.exe");
