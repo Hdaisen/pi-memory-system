@@ -61,9 +61,27 @@ Source of truth for code is the installed agent at `~/.pi/agent/`. Changes flow:
 
 1. Edit code at `C:\Users\10342\.pi\agent\extensions\` (or scripts/agents)
 2. Copy changed files to this project repo
-3. Commit and push
+3. Commit and push via branch + PR (main branch is protected)
 
 This project is the **downstream** — copy TO it, not FROM it.
+
+### Git Branch Policy
+
+Main branch is protected — direct pushes are blocked. All changes must go through PR:
+
+```bash
+# 1. Create feature branch
+git checkout -b feat/<description>
+
+# 2. Commit and push branch
+git add -A
+git commit -m "<description>"
+git push origin feat/<description>
+
+# 3. Create PR and merge (can self-approve)
+gh pr create --base main --title "<description>" --body "<details>"
+gh pr merge --squash  # or --merge / --rebase
+```
 
 ## Language
 
