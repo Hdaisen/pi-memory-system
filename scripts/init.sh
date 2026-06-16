@@ -52,7 +52,9 @@ done
 # Copy notebook template
 notebook_dst="$PROJ_MEM_DIR/notebook.md"
 if [ ! -f "$notebook_dst" ]; then
-    cp "$SCRIPT_DIR/templates/notebook.md" "$notebook_dst"
+    sed -e "s/{{PROJECT_NAME}}/$PROJECT_NAME/g" \
+        -e "s/{{TIMESTAMP}}/$(date -u +%Y-%m-%dT%H:%M:%SZ)/g" \
+        "$SCRIPT_DIR/templates/notebook.md" > "$notebook_dst"
     echo "  ✅ Created $notebook_dst"
 else
     echo "  ⏭️  Skipped notebook.md (already exists)"
@@ -63,9 +65,8 @@ if [ "$SKIP_EXTENSION" = false ]; then
     echo "[3/4] Installing extension..."
     ext_dir="$HOME_DIR/.pi/agent/extensions"
     mkdir -p "$ext_dir"
-    cp "$SCRIPT_DIR/extension/memory.ts" "$ext_dir/memory.ts"
-    cp "$SCRIPT_DIR/extension/compress.ts" "$ext_dir/compress.ts"
-    echo "  ✅ Installed extension to $ext_dir/{memory.ts,compress.ts}"
+    cp "$SCRIPT_DIR/extensions/memory.ts" "$ext_dir/memory.ts"
+    echo "  ✅ Installed extension to $ext_dir/memory.ts"
 else
     echo "[3/4] Skipping extension installation (--skip-extension)"
 fi
@@ -85,6 +86,14 @@ if [ ! -f "$core_prompt_dst" ]; then
     echo "  ⚠️  EDIT THIS FILE to set your AI persona!"
 else
     echo "  ⏭️  Skipped core-prompt.md (already exists)"
+fi
+
+rules_dst="$global_memory_dir/rules.md"
+if [ ! -f "$rules_dst" ]; then
+    cp "$SCRIPT_DIR/templates/rules.md" "$rules_dst"
+    echo "  ✅ Created $rules_dst"
+else
+    echo "  ⏭️  Skipped rules.md (already exists)"
 fi
 
 # Create empty global memory files

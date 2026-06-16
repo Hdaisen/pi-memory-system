@@ -62,7 +62,10 @@ foreach ($file in $templateFiles) {
 # Copy notebook template
 $notebookDst = Join-Path $projMemDir "notebook.md"
 if (-not (Test-Path $notebookDst)) {
-    Copy-Item (Join-Path $ScriptRoot "templates" "notebook.md") $notebookDst
+    $content = Get-Content (Join-Path $ScriptRoot "templates" "notebook.md") -Raw
+    $content = $content -replace '\{\{PROJECT_NAME\}\}', $projectName
+    $content = $content -replace '\{\{TIMESTAMP\}\}', (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+    Set-Content -Path $notebookDst -Value $content
     Write-Host "  ✅ Created $notebookDst" -ForegroundColor Green
 } else {
     Write-Host "  ⏭️  Skipped notebook.md (already exists)" -ForegroundColor Gray
@@ -74,12 +77,10 @@ if (-not $SkipExtension) {
     $extDir = Join-Path $HomeDir ".pi" "agent" "extensions"
     New-Item -ItemType Directory -Path $extDir -Force | Out-Null
 
-    @("memory.ts", "compress.ts") | ForEach-Object {
-      $src = Join-Path $ScriptRoot "extension" "$_"
-      $dst = Join-Path $extDir "$_"
-      Copy-Item $src $dst -Force
-    }
-    Write-Host "  ✅ Installed extension to ${extDir}{memory.ts,compress.ts}" -ForegroundColor Green
+    $src = Join-Path $ScriptRoot "extensions" "memory.ts"
+    $dst = Join-Path $extDir "memory.ts"
+    Copy-Item $src $dst -Force
+    Write-Host "  ✅ Installed extension to ${extDir}\memory.ts" -ForegroundColor Green
 } else {
     Write-Host "[3/4] Skipping extension installation (--SkipExtension)" -ForegroundColor Gray
 }
@@ -100,6 +101,14 @@ if (-not (Test-Path $corePromptDst)) {
     Write-Host "  ⚠️  EDIT THIS FILE to set your AI persona!" -ForegroundColor Magenta
 } else {
     Write-Host "  ⏭️  Skipped core-prompt.md (already exists)" -ForegroundColor Gray
+}
+
+$rulesDst = Join-Path $globalMemoryDir "rules.md"
+if (-not (Test-Path $rulesDst)) {
+    Copy-Item (Join-Path $ScriptRoot "templates" "rules.md") $rulesDst
+    Write-Host "  ✅ Created $rulesDst" -ForegroundColor Green
+} else {
+    Write-Host "  ⏭️  Skipped rules.md (already exists)" -ForegroundColor Gray
 }
 
 # Create empty global memory files
