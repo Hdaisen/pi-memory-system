@@ -46,7 +46,6 @@ export function ensureWslSymlink(): void {
       `"${wslPath}" ln -sf "${winMemoryPath}" "${wslMemoryPath}"`,
       { encoding: "utf8", timeout: 10000 }
     );
-    console.log(`[memory] Created WSL symlink: ${wslMemoryPath} → ${winMemoryPath}`);
   } catch (e) {
     // WSL not available or command failed — not critical, suppress
   }

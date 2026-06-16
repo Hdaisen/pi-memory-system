@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -300,12 +301,24 @@ def write_turn_summary(messages: list, turns_dir: Path):
 # 子代理启动
 # ============================================================
 
+def _forward_stream(src, dest, prefix=b""):
+    """Read lines from src, prefix each, write to dest (binary mode)."""
+    for line in iter(src.readline, b""):
+        if line:
+            dest.write(prefix + line)
+            dest.flush()
+    src.close()
+
+
 def spawn_subagent(turns_dir: Path):
     """启动 pi -p 进程进行记忆提取
 
     Streaming 模式：子代理的 stdout/stderr 实时输出到终端，
     用户能看到进度而非黑屏。用 bytes 模式 + UTF-8 解码
     避免 Windows GBK 编码崩溃。
+
+    stderr 不再合并到 stdout — 分开读取，确保 TypeScript
+    进度面板能实时捕获子代理的所有输出。
     """
     raw_md = turns_dir / "raw.md"
     extractor_prompt = AGENTS_DIR / "memory-extractor.md"
@@ -347,6 +360,7 @@ def spawn_subagent(turns_dir: Path):
 
     # ── Streaming mode ──
     # Pipe prompt via stdin (pi -p reads from stdin, command-line prompt arg doesn't work in WSL)
+    # stderr is piped separately (not merged to stdout) so TypeScript progress UI can read it
     try:
         proc = subprocess.Popen(
             full_cmd,
@@ -354,7 +368,7 @@ def spawn_subagent(turns_dir: Path):
             cwd=turns_dir.parent,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,  # 合并 stderr → stdout
+            stderr=subprocess.PIPE,
             env=env,
         )
         # Send prompt via stdin and close
@@ -366,12 +380,13 @@ def spawn_subagent(turns_dir: Path):
         error_log.write_text(f"# Extraction Error — {datetime.now(timezone.utc).isoformat()}\n\n{error_msg}\n", encoding="utf-8")
         raise RuntimeError(error_msg)
 
-    # 逐行读取并输出，bytes → UTF-8 避免 GBK 崩溃
-    assert proc.stdout is not None
-    for raw_line in iter(proc.stdout.readline, b""):
-        line = raw_line.decode("utf-8", errors="replace").rstrip()
-        if line:
-            print(f"  {line}", file=sys.stderr)
+    # Forward both stdout and stderr to Python's stderr (→ TypeScript progress UI).
+    # Uses threads to avoid blocking on either stream.
+    stderr_bin = sys.stderr.buffer
+    t_out = threading.Thread(target=_forward_stream, args=(proc.stdout, stderr_bin, b"  "), daemon=True)
+    t_err = threading.Thread(target=_forward_stream, args=(proc.stderr, stderr_bin), daemon=True)
+    t_out.start()
+    t_err.start()
 
     try:
         proc.wait(timeout=360)  # 最长等 6 分钟，防止子代理卡死导致僵尸进程
@@ -381,6 +396,9 @@ def spawn_subagent(turns_dir: Path):
         print(f"[extract] ✗ {error_msg}", file=sys.stderr)
         error_log.write_text(f"# Extraction Error — {datetime.now(timezone.utc).isoformat()}\n\n{error_msg}\n", encoding="utf-8")
         raise RuntimeError(error_msg)
+    finally:
+        t_out.join(timeout=5)
+        t_err.join(timeout=5)
 
     if proc.returncode == 0:
         # Success — clear any old error log
@@ -400,6 +418,10 @@ def spawn_subagent(turns_dir: Path):
 
 def main():
     sys.stdin.reconfigure(encoding="utf-8")
+    # Force line-buffered stderr so TypeScript progress UI gets updates immediately.
+    # When Python's stderr is piped (not a TTY), it defaults to block buffering,
+    # which means the progress panel shows nothing until the buffer fills or flushes.
+    sys.stderr.reconfigure(line_buffering=True)
 
     # 从 stdin 读取消息
     raw = sys.stdin.read()

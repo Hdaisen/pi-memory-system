@@ -18,14 +18,44 @@ let _agentAborted = false;
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/** Parse a stderr line from run_extraction.py and return a human-readable step label. */
-function parseStep(line: string): string | null {
-  if (line.includes("raw.md:") || line.includes("Writing raw.md")) return "Formatting raw.md...";
-  if (line.includes("turn-summary.md:") || line.includes("Writing turn-summary")) return "Extracting turn summary...";
-  if (line.includes("Starting memory extraction subagent")) return "Starting memory subagent...";
-  if (line.includes("subagent: done")) return "Subagent finished";
-  if (line.includes("extraction complete")) return "Extraction complete ✓";
-  if (line.includes("subagent failed") || line.includes("timed out")) return "Subagent failed ✗";
+/** Parse a stderr line from run_extraction.py and return structured progress info. */
+interface ProgressUpdate {
+  type: "extract" | "subagent" | "status";
+  label: string;
+  done?: boolean;
+}
+
+function parseProgress(line: string): ProgressUpdate | null {
+  // Extract phase: raw.md and turn-summary.md
+  if (line.includes("raw.md:")) {
+    const match = line.match(/raw\.md:\s*(\d+)\s*msgs/);
+    return { type: "extract", label: `raw.md${match ? ": " + match[1] + " msgs" : ""}`, done: true };
+  }
+  if (line.includes("turn-summary.md:")) {
+    const match = line.match(/turn-summary\.md:\s*(\d+)\s*chars/);
+    return { type: "extract", label: `turn-summary.md${match ? ": " + match[1] + " chars" : ""}`, done: true };
+  }
+  if (line.includes("Starting memory extraction subagent")) {
+    return { type: "extract", label: "Starting memory extraction subagent..." };
+  }
+
+  // Subagent phase: reading, writing, processing
+  if (line.includes("[subagent]") || line.includes("[memory]")) {
+    const label = line.replace(/\[subagent\]\s*/, "[subagent] ").replace(/\[memory\]\s*/, "[memory] ");
+    return { type: "subagent", label };
+  }
+
+  // Status messages
+  if (line.includes("extraction complete")) return { type: "status", label: "Extraction complete", done: true };
+  if (line.includes("subagent done")) return { type: "status", label: "Subagent finished", done: true };
+  if (line.includes("subagent failed") || line.includes("timed out")) return { type: "status", label: "Extraction failed", done: false };
+
+  // Other messages with [prefix]
+  const prefixMatch = line.match(/\[(\w+)\]\s*(.*)/);
+  if (prefixMatch) {
+    return { type: "subagent", label: line };
+  }
+
   return null;
 }
 
@@ -48,7 +78,8 @@ function runExtractionWithProgress(
     ctx.ui.custom<void>((tui: any, theme: any, _kb: any, done: () => void) => {
       let step = "Initializing...";
       let frame = 0;
-      const logLines: string[] = [];
+      const completedTasks: string[] = [];
+      const subagentLogs: string[] = [];
       let childProc: ChildProcess | null = null;
       let settled = false;
       let animTimer: ReturnType<typeof setInterval> | null = null;
@@ -84,24 +115,34 @@ function runExtractionWithProgress(
           // Separator
           lines.push(theme.fg("accent", "├" + "─".repeat(w - 2) + "┤"));
 
-          // Current step
-          const stepLine = `  → ${step}`;
-          const stepPadded = stepLine + " ".repeat(Math.max(0, w - 2 - stepLine.length));
-          lines.push(theme.fg("accent", "│") + theme.fg("success", stepPadded) + theme.fg("accent", "│"));
+          // Completed tasks with checkmarks
+          for (const task of completedTasks) {
+            const taskLine = `  [extract] ✓ ${task}`;
+            const taskPadded = taskLine + " ".repeat(Math.max(0, w - 2 - taskLine.length));
+            lines.push(theme.fg("accent", "│") + theme.fg("success", taskPadded) + theme.fg("accent", "│"));
+          }
 
-          // Empty line
+          // Current step (if not completed yet)
+          if (!settled) {
+            const stepLine = `  [extract] ${step}`;
+            const stepPadded = stepLine + " ".repeat(Math.max(0, w - 2 - stepLine.length));
+            lines.push(theme.fg("accent", "│") + theme.fg("text", stepPadded) + theme.fg("accent", "│"));
+          }
+
+          // Empty line separator
           lines.push(theme.fg("accent", "│") + " ".repeat(w - 2) + theme.fg("accent", "│"));
 
-          // Log lines (show last 8)
-          const visible = logLines.slice(-8);
-          for (const log of visible) {
+          // Subagent logs (show last 6)
+          const visibleLogs = subagentLogs.slice(-6);
+          for (const log of visibleLogs) {
             const truncated = log.length > w - 4 ? log.slice(0, w - 7) + "..." : log;
             const lp = `  ${truncated}` + " ".repeat(Math.max(0, w - 2 - truncated.length - 2));
             lines.push(theme.fg("accent", "│") + theme.fg("dim", lp) + theme.fg("accent", "│"));
           }
 
-          // Fill remaining space (target ~14 lines total)
-          const remaining = Math.max(0, 8 - visible.length);
+          // Fill remaining space (target ~12 lines total)
+          const totalContent = completedTasks.length + 1 + subagentLogs.length + 4; // +4 for borders/title/separator/hint
+          const remaining = Math.max(0, 12 - totalContent);
           for (let i = 0; i < remaining; i++) {
             lines.push(theme.fg("accent", "│") + " ".repeat(w - 2) + theme.fg("accent", "│"));
           }
@@ -135,7 +176,7 @@ function runExtractionWithProgress(
       const ac = new AbortController();
       timeoutTimer = setTimeout(() => {
         if (!settled) { childProc?.kill(); finish(false); }
-      }, 180000);
+      }, 360000);
 
       childProc = spawn("python3", [scriptPath], {
         cwd,
@@ -156,20 +197,42 @@ function runExtractionWithProgress(
         for (const line of parts) {
           const trimmed = line.trim();
           if (!trimmed) continue;
-          const newStep = parseStep(trimmed);
-          if (newStep) step = newStep;
-          logLines.push(trimmed);
+
+          const progress = parseProgress(trimmed);
+          if (progress) {
+            switch (progress.type) {
+              case "extract":
+                if (progress.done) {
+                  completedTasks.push(progress.label);
+                } else {
+                  step = progress.label;
+                }
+                break;
+              case "subagent":
+                subagentLogs.push(progress.label);
+                break;
+              case "status":
+                step = progress.label;
+                if (progress.done !== undefined) {
+                  step = progress.done ? "Extraction complete ✓" : "Extraction failed ✗";
+                }
+                break;
+            }
+          } else {
+            // Generic log line
+            subagentLogs.push(trimmed);
+          }
         }
         tui.requestRender();
       });
 
-      childProc.on("exit", (code) => {
-        if (stderrBuf.trim()) logLines.push(stderrBuf.trim());
+      childProc.on("exit", (code: number | null) => {
+        if (stderrBuf.trim()) subagentLogs.push(stderrBuf.trim());
         finish(code === 0);
       });
 
-      childProc.on("error", (err) => {
-        logLines.push(`Error: ${err.message}`);
+      childProc.on("error", (err: Error) => {
+        subagentLogs.push(`Error: ${err.message}`);
         finish(false);
       });
 
@@ -195,7 +258,7 @@ async function runExtractionSimple(
 
   try {
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 180000);
+    const timer = setTimeout(() => ac.abort(), 360000);
 
     const stderr = await new Promise<string>((resolve, reject) => {
       const child = spawn("python3", [scriptPath], {
@@ -211,15 +274,15 @@ async function runExtractionSimple(
         errChunks.push(d);
         // Update status with latest progress
         const line = d.toString("utf-8").trim();
-        const step = parseStep(line);
-        if (step) {
-          ctx.ui.setStatus("memory", `🧠 ⏳ ${step}`);
+        const progress = parseProgress(line);
+        if (progress) {
+          ctx.ui.setStatus("memory", `🧠 ⏳ ${progress.label}`);
         }
       });
 
       child.stdin!.end(JSON.stringify(messages));
 
-      child.on("exit", (code) => {
+      child.on("exit", (code: number | null) => {
         clearTimeout(timer);
         const err = Buffer.concat(errChunks).toString("utf-8");
         if (code === 0) {
@@ -228,14 +291,14 @@ async function runExtractionSimple(
           reject(new Error(`exit code ${code}: ${err.slice(0, 500)}`));
         }
       });
-      child.on("error", (err) => {
+      child.on("error", (err: Error) => {
         clearTimeout(timer);
         reject(err);
       });
     });
 
     ctx.ui.setStatus("memory", "🧠 🟢");
-  } catch (e) {
+  } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     const stack = e instanceof Error ? e.stack : "";
     console.warn("[memory] extraction failed:", msg);
@@ -259,7 +322,7 @@ export function registerHooks(pi: ExtensionAPI): void {
   // ============================================================
   // session_start
   // ============================================================
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (_event: any, ctx: any) => {
     _agentAborted = false;
     ctx.ui.setStatus("memory", "🧠 🟢");
     updateTaskWidget(ctx.cwd, ctx);
@@ -268,7 +331,7 @@ export function registerHooks(pi: ExtensionAPI): void {
   // ============================================================
   // before_agent_start: inject memory context into system prompt
   // ============================================================
-  pi.on("before_agent_start", async (event, ctx) => {
+  pi.on("before_agent_start", async (event: any, ctx: any) => {
     // Guard: subagents have their own prompts (e.g. memory-extractor.md),
     // do NOT inject core-prompt + notebook + turn-summary into them.
     if (process.env.PI_SUBAGENT === "1") return;
@@ -325,9 +388,15 @@ export function registerHooks(pi: ExtensionAPI): void {
     };
   });
 
-  // context: keep only system messages (our injections), strip all history
   // ============================================================
-  pi.on("context", async (event, ctx) => {
+  // context: keep system messages and optionally recent history
+  //
+  // Strategy:
+  //   - New turn (no assistant history): strip all history, keep system + current user
+  //   - Follow-up turn (has assistant history): keep system + current user + last assistant exchange
+  //   - Mid-turn (tool-calling loop): don't trim
+  // ============================================================
+  pi.on("context", async (event: any, ctx: any) => {
     const messages = event.messages;
     if (!messages || messages.length <= 2) return;
 
@@ -336,12 +405,45 @@ export function registerHooks(pi: ExtensionAPI): void {
     const lastMsg = messages[messages.length - 1];
     if (lastMsg && lastMsg.role !== "user") return;
 
-    // At user turn boundary: keep system/developer + current user message
-    // (old user/assistant/tool history is stripped — subagent essence covers it)
+    // Check if this is a follow-up message (has assistant history)
+    const hasAssistantHistory = messages.some((m: any) => m.role === "assistant");
+
+    if (hasAssistantHistory) {
+      // Follow-up scenario: keep system/developer + last assistant exchange + current user message
+      // This preserves context when user appends/corrects mid-conversation
+      const lastUserIdx = messages.length - 1;
+
+      // Find the last assistant message before the current user message
+      let lastAssistantIdx = -1;
+      for (let i = lastUserIdx - 1; i >= 0; i--) {
+        if (messages[i].role === "assistant") {
+          lastAssistantIdx = i;
+          break;
+        }
+      }
+
+      if (lastAssistantIdx >= 0) {
+        // Keep: system/developer messages + last assistant + any tool results after it + current user
+        const filtered = messages.filter(
+          (msg: any, i: number) =>
+            msg.role === "system" ||
+            msg.role === "developer" ||
+            i >= lastAssistantIdx  // Keep from last assistant onwards
+        );
+
+        // If nothing to trim, skip
+        if (filtered.length === messages.length) return;
+
+        ctx.ui.setStatus("memory", "🧠 🟡");
+        return { messages: filtered };
+      }
+    }
+
+    // New turn scenario: keep system/developer + current user message only
     const lastUserIdx = messages.length - 1;
     const filtered = messages.filter(
-      (_: any, i: number) =>
-        _.role === "system" || _.role === "developer" || i === lastUserIdx
+      (msg: any, i: number) =>
+        msg.role === "system" || msg.role === "developer" || i === lastUserIdx
     );
 
     // If nothing to trim, skip
@@ -363,7 +465,7 @@ export function registerHooks(pi: ExtensionAPI): void {
   // during turn_end but is undefined by agent_end (turn already cleaned
   // up), so we cache it here.
   // ============================================================
-  pi.on("turn_end", async (_event, ctx) => {
+  pi.on("turn_end", async (_event: any, ctx: any) => {
     if (ctx.signal?.aborted) {
       _agentAborted = true;
     }
@@ -381,7 +483,7 @@ export function registerHooks(pi: ExtensionAPI): void {
   //   - Try ctx.ui.custom() to show a live progress panel with spinner + log
   //   - Fall back to ctx.ui.setStatus() if custom UI is unavailable
   // ============================================================
-  pi.on("agent_end", async (_event, ctx) => {
+  pi.on("agent_end", async (_event: any, ctx: any) => {
     const cwd = ctx.cwd;
 
     // Guard 1: Prevent subagent recursion
@@ -403,7 +505,7 @@ export function registerHooks(pi: ExtensionAPI): void {
     // Try rich progress UI first; fall back to status bar on failure
     try {
       await runExtractionWithProgress(ctx, scriptPath, messages, cwd);
-    } catch (e) {
+    } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       // If ctx.ui.custom is not available, use simple fallback
       if (msg.includes("not a function") || msg.includes("custom")) {
@@ -424,7 +526,7 @@ export function registerHooks(pi: ExtensionAPI): void {
   // ============================================================
   // tool_result: auto-convert binary files + compress verbose output
   // ============================================================
-  pi.on("tool_result", async (event, _ctx) => {
+  pi.on("tool_result", async (event: any, _ctx: any) => {
     // MarkItDown: auto-convert binary files when read fails
     if (event.toolName === "read" && event.isError) {
       const filePath = (event.input as Record<string, unknown>)?.path as string | undefined;
