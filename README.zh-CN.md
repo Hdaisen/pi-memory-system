@@ -93,6 +93,8 @@
 | `🗑️ forget` | ⚠️ 删除。优先用 supersede。 |
 | `📓 notebook` | 查看/更新会话小本本 |
 | `📊 memory_status` | 查看记忆系统状态概览 |
+| `📄 convert_file` | 将二进制文件（PDF、DOCX 等）通过 MarkItDown（WSL）转为 Markdown |
+| `🔄 set_project` | 修正项目名检测 |
 | `/subagent-model` | 选择子代理使用的模型 |
 
 ## 状态指示器
@@ -116,7 +118,7 @@ cat ~/.pi/agent/memory/projects/<name>/turns/extraction-error.log
 
 常见原因：
 - `pi` 不在 PATH 中（子代理启动失败）
-- Python 脚本超时（>180s）
+- Python 脚本超时（>360s）
 - 子代理进程崩溃
 
 ## 快速开始
@@ -132,21 +134,20 @@ cat ~/.pi/agent/memory/projects/<name>/turns/extraction-error.log
 ```bash
 # 克隆仓库
 git clone https://github.com/Hdaisen/pi-memory-system.git
+cd pi-memory-system
 
-# 复制扩展文件
-cp pi-memory-system/extensions/memory.ts ~/.pi/agent/extensions/memory.ts
+# 一键安装（创建目录、复制扩展 + 模板 + 脚本）
+./scripts/init.sh
 
-# 复制脚本
-cp pi-memory-system/scripts/*.py ~/.pi/agent/scripts/
-
-# 复制子代理定义
-mkdir -p ~/.pi/agent/agents
-cp pi-memory-system/agents/memory-extractor.md ~/.pi/agent/agents/
-
-# 复制提示词和规则
-cp pi-memory-system/core-prompt.md ~/.pi/agent/memory/core-prompt.md
-cp pi-memory-system/rules.md ~/.pi/agent/memory/rules.md
+# 或在 Windows（PowerShell）：
+.\scripts\init.ps1
 ```
+
+init 脚本会：
+1. 创建 `~/.pi/agent/memory/projects/<name>/` 目录结构
+2. 复制模板文件（小本本、记忆条目模板）
+3. 安装扩展（`memory.ts` + `memory/` 模块）到 `~/.pi/agent/extensions/`
+4. 设置全局 `core-prompt.md` 和 `rules.md`（仅首次）
 
 然后重启 Pi 或运行 `/reload`。
 
@@ -211,17 +212,28 @@ memories/
 ```
 pi-memory-system/
 ├── extensions/
-│   └── memory.ts            # 核心扩展（钩子 + 工具）
+│   ├── memory.ts              # 入口文件（串联钩子、工具、命令）
+│   └── memory/
+│       ├── config.ts          # HOME、PATHS、项目名检测
+│       ├── utils.ts           # safeRead、extractLinks、resolveLink、walkMarkdownFiles
+│       ├── diversity.ts       # 内容指纹、多样性排序
+│       ├── markitdown.ts      # 二进制文件检测、MarkItDown WSL 转换
+│       ├── memory-ops.ts      # refreshIndex、getMemoryStatus、ensureProjectDir
+│       ├── tools.ts           # 9 个工具注册（remember、recall 等）
+│       ├── hooks.ts           # 7 个生命周期钩子（before_agent_start、agent_end 等）
+│       └── commands.ts        # /subagent-model 命令
 ├── agents/
-│   └── memory-extractor.md  # 子代理定义
+│   └── memory-extractor.md    # 子代理定义
 ├── scripts/
-│   └── run_extraction.py    # 主管线（格式化 + 子代理启动）
-├── templates/               # 模板文件
-├── core-prompt.md           # 参考核心提示词
-├── rules.md                 # 行为规则
-├── LICENSE                  # MIT
-├── README.md                # 英文文档
-└── README.zh-CN.md          # 中文文档
+│   ├── run_extraction.py      # 主管线（格式化 + 子代理启动）
+│   ├── init.ps1               # Windows 安装脚本
+│   └── init.sh                # Unix/macOS 安装脚本
+├── templates/                 # 安装用模板文件
+├── core-prompt.md             # 参考核心提示词
+├── rules.md                   # 行为规则
+├── LICENSE                    # MIT
+├── README.md                  # 英文文档
+└── README.zh-CN.md            # 中文文档
 ```
 
 ---

@@ -110,6 +110,8 @@ Everything else is stripped by the `context` event handler (mid-turn safe).
 | `🗑️ forget` | ⚠️ Delete. Prefer supersede. |
 | `📓 notebook` | View/update the session notebook |
 | `📊 memory_status` | View memory file status overview |
+| `📄 convert_file` | Convert binary files (PDF, DOCX, etc.) to Markdown via MarkItDown (WSL) |
+| `🔄 set_project` | Correct project name detection |
 | `/subagent-model` | Pick model for memory-extractor subagent |
 
 ## Quick Start
@@ -125,21 +127,20 @@ Everything else is stripped by the `context` event handler (mid-turn safe).
 ```bash
 # Clone this repo
 git clone https://github.com/Hdaisen/pi-memory-system.git
+cd pi-memory-system
 
-# Copy extension
-cp pi-memory-system/extensions/memory.ts ~/.pi/agent/extensions/memory.ts
+# One-command install (creates directories, copies extension + templates + scripts)
+./scripts/init.sh
 
-# Copy scripts
-cp pi-memory-system/scripts/*.py ~/.pi/agent/scripts/
-
-# Copy subagent definition
-mkdir -p ~/.pi/agent/agents
-cp pi-memory-system/agents/memory-extractor.md ~/.pi/agent/agents/
-
-# Copy core prompt
-cp pi-memory-system/core-prompt.md ~/.pi/agent/memory/core-prompt.md
-cp pi-memory-system/rules.md ~/.pi/agent/memory/rules.md
+# Or on Windows (PowerShell):
+.\scripts\init.ps1
 ```
+
+The init script will:
+1. Create `~/.pi/agent/memory/projects/<name>/` directory structure
+2. Copy template files (notebook, memory entry templates)
+3. Install the extension (`memory.ts` + `memory/` modules) to `~/.pi/agent/extensions/`
+4. Set up global `core-prompt.md` and `rules.md` (first time only)
 
 Then restart Pi or run `/reload`.
 
@@ -208,7 +209,7 @@ cat ~/.pi/agent/memory/projects/<name>/turns/extraction-error.log
 
 Common causes:
 - `pi` not found in PATH (subagent spawn failed)
-- Python script timeout (>180s)
+- Python script timeout (>360s)
 - Subagent process crash
 
 ## Subagent Model
@@ -228,17 +229,28 @@ The selection is persisted in `~/.pi/agent/memory/subagent-model.txt`. Delete th
 ```
 pi-memory-system/
 ├── extensions/
-│   └── memory.ts            # Core Pi extension (hooks + tools)
+│   ├── memory.ts              # Entry point (wires hooks, tools, commands)
+│   └── memory/
+│       ├── config.ts          # HOME, PATHS, project name detection
+│       ├── utils.ts           # safeRead, extractLinks, resolveLink, walkMarkdownFiles
+│       ├── diversity.ts       # Content fingerprinting, diversity sort
+│       ├── markitdown.ts      # Binary file detection, MarkItDown WSL conversion
+│       ├── memory-ops.ts      # refreshIndex, getMemoryStatus, ensureProjectDir
+│       ├── tools.ts           # 9 tool registrations (remember, recall, etc.)
+│       ├── hooks.ts           # 7 lifecycle hooks (before_agent_start, agent_end, etc.)
+│       └── commands.ts        # /subagent-model command
 ├── agents/
-│   └── memory-extractor.md  # Subagent definition
+│   └── memory-extractor.md    # Subagent definition
 ├── scripts/
-│   └── run_extraction.py    # Main pipeline (format + subagent launch)
-├── templates/               # Template files
-├── core-prompt.md           # Reference core prompt
-├── rules.md                 # Behavioral rules
-├── LICENSE                  # MIT
-├── README.md                # English documentation
-└── README.zh-CN.md          # Chinese documentation
+│   ├── run_extraction.py      # Main pipeline (format + subagent launch)
+│   ├── init.ps1               # Windows install script
+│   └── init.sh                # Unix/macOS install script
+├── templates/                 # Template files for init
+├── core-prompt.md             # Reference core prompt
+├── rules.md                   # Behavioral rules
+├── LICENSE                    # MIT
+├── README.md                  # English documentation
+└── README.zh-CN.md            # Chinese documentation
 ```
 
 ---
