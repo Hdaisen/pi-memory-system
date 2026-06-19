@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { HOME, PATHS } from "./config";
-import { safeRead, extractLinks, readLinkedContent } from "./utils";
+import { safeRead, extractLinks, readLinkedContent, readMemoryIndex, searchMemories } from "./utils";
 import { isBinaryFile, convertWithMarkitdown } from "./markitdown";
 import { ensureProjectDir, refreshIndex, updateTaskWidget } from "./memory-ops";
 
@@ -378,10 +378,26 @@ export function registerHooks(pi: ExtensionAPI): void {
       linkedSection = "\n\n---\n\n## Related Memories\n" + linkedContent.join("\n\n");
     }
 
-    // 6. Build memory context — core + rules + notebook + essence + linked
+    // 6. Read memory index and search for relevant memories
+    let memoryIndexSection = "";
+    let searchResultsSection = "";
+
+    const indexContent = readMemoryIndex(cwd);
+    if (indexContent) {
+      memoryIndexSection = "\n\n---\n\n## Memory Index\n" + indexContent;
+    }
+
+    if (event.prompt && event.prompt.trim().length > 10) {
+      const searchResults = searchMemories(event.prompt, cwd, 5);
+      if (searchResults.length > 0) {
+        searchResultsSection = "\n\n---\n\n## Related Memories (Auto-Injected)\n" + searchResults.join("\n\n");
+      }
+    }
+
+    // 7. Build memory context — core + rules + notebook + essence + linked + index + search
     let memoryContext = `${coreSection}\n`;
     if (rules) memoryContext += `\n${rules}\n`;
-    memoryContext += `\n---\n\n${notebookSection}${summarySection}${essenceSection}${linkedSection}\n`;
+    memoryContext += `\n---\n\n${notebookSection}${summarySection}${essenceSection}${linkedSection}${memoryIndexSection}${searchResultsSection}\n`;
 
     return {
       systemPrompt: event.systemPrompt + `\n\n${memoryContext}`,
