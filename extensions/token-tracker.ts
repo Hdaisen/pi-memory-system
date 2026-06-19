@@ -220,7 +220,7 @@ export default function (pi: ExtensionAPI) {
     const cost = usage.cost?.total || 0;
 
     // ─── Terminal display ───
-    const w = 48;
+    const w = 50;
     const lines: string[] = [];
 
     const border = "+" + "-".repeat(w - 2) + "+";
@@ -234,7 +234,7 @@ export default function (pi: ExtensionAPI) {
     };
 
     const row = (label: string, value: string): string => {
-      const content = `  ${label} ${value}`;
+      const content = `  ${label.padEnd(12)}${value}`;
       const pad = Math.max(0, w - 2 - content.length);
       return "|" + content + " ".repeat(pad) + "|";
     };
@@ -243,19 +243,19 @@ export default function (pi: ExtensionAPI) {
     lines.push(border);
     lines.push(center("TOKEN USAGE"));
     lines.push(sep);
-    lines.push(row("Cache Hit", formatNum(cacheHit).padStart(14) + " tokens"));
-    lines.push(row("Cache Miss", formatNum(cacheMiss).padStart(14) + " tokens"));
-    lines.push(row("Cache Write", formatNum(cacheWrite).padStart(14) + " tokens"));
-    lines.push(row("Input Total", formatNum(inputTotal).padStart(14) + " tokens"));
-    lines.push(row("Output", formatNum(outputTokens).padStart(14) + " tokens"));
-    lines.push(row("Total", formatNum(totalTokens).padStart(14) + " tokens"));
+    lines.push(row("Cache Hit", formatNum(cacheHit).padStart(10) + " tokens"));
+    lines.push(row("Cache Miss", formatNum(cacheMiss).padStart(10) + " tokens"));
+    lines.push(row("Cache Write", formatNum(cacheWrite).padStart(10) + " tokens"));
+    lines.push(row("Input Total", formatNum(inputTotal).padStart(10) + " tokens"));
+    lines.push(row("Output", formatNum(outputTokens).padStart(10) + " tokens"));
+    lines.push(row("Total", formatNum(totalTokens).padStart(10) + " tokens"));
     lines.push(sep);
-    lines.push(row("Hit Rate", formatPercent(cacheHitRate).padStart(14) + " " + drawBar(cacheHitRate)));
+    lines.push(row("Hit Rate", formatPercent(cacheHitRate).padStart(10) + " " + drawBar(cacheHitRate)));
     if (durationMs !== null) {
-      lines.push(row("Duration", formatDuration(durationMs).padStart(14)));
+      lines.push(row("Duration", formatDuration(durationMs).padStart(10)));
     }
     if (cost > 0) {
-      lines.push(row("Cost", formatCost(cost).padStart(14)));
+      lines.push(row("Cost", formatCost(cost).padStart(10)));
     }
     lines.push(border);
     lines.push("");
