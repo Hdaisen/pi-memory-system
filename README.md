@@ -122,6 +122,23 @@ Everything else is stripped by the `context` event handler (mid-turn safe).
 - Node.js 18+
 - Python 3 (for `run_extraction.py`)
 
+### Required Pi Packages
+
+The memory system depends on these Pi packages (installed automatically by `init.sh`/`init.ps1`):
+
+| Package | Purpose |
+|:--------|:--------|
+| `pi-subagents` | Core dependency — powers the memory-extractor subagent |
+| `context-mode` | Context management — handles history trimming and context optimization |
+| `pi-mcp-adapter` | MCP adapter — enables tool integration for subagents |
+
+If installing manually, run:
+```bash
+pi install npm:pi-subagents
+pi install npm:context-mode
+pi install npm:pi-mcp-adapter
+```
+
 ### Install
 
 ```bash
@@ -140,7 +157,8 @@ The init script will:
 1. Create `~/.pi/agent/memory/projects/<name>/` directory structure
 2. Copy template files (notebook, memory entry templates)
 3. Install the extension (`memory.ts` + `memory/` modules) to `~/.pi/agent/extensions/`
-4. Set up global `core-prompt.md` and `rules.md` (first time only)
+4. Install required Pi packages (`pi-subagents`, `context-mode`, `pi-mcp-adapter`)
+5. Set up global `core-prompt.md` and `rules.md` (first time only)
 
 Then restart Pi or run `/reload`.
 
@@ -230,6 +248,8 @@ The selection is persisted in `~/.pi/agent/memory/subagent-model.txt`. Delete th
 pi-memory-system/
 ├── extensions/
 │   ├── memory.ts              # Entry point (wires hooks, tools, commands)
+│   ├── auto.ts                # Spec/task automation (built on pi-subagents + memory)
+│   ├── ocr.ts                 # OCR tool for image/PDF text extraction
 │   └── memory/
 │       ├── config.ts          # HOME, PATHS, project name detection
 │       ├── utils.ts           # safeRead, extractLinks, resolveLink, walkMarkdownFiles

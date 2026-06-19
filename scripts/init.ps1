@@ -7,7 +7,8 @@
     1. Creates .pi/memory/ directory structure
     2. Copies template files for customization
     3. Installs the extension globally (first time only)
-    4. Creates the global core-prompt.md (first time only)
+    4. Installs required Pi packages (pi-subagents, context-mode, pi-mcp-adapter)
+    5. Creates the global core-prompt.md (first time only)
 
 .PARAMETER ProjectDir
     Target project directory. Defaults to current directory.
@@ -15,15 +16,20 @@
 .PARAMETER SkipExtension
     Skip extension installation (useful if already installed).
 
+.PARAMETER SkipPackages
+    Skip Pi package installation (useful if already installed).
+
 .EXAMPLE
     .\scripts\init.ps1
     .\scripts\init.ps1 -ProjectDir "C:\MyProject"
     .\scripts\init.ps1 -SkipExtension
+    .\scripts\init.ps1 -SkipPackages
 #>
 
 param(
     [string]$ProjectDir = (Get-Location).Path,
-    [switch]$SkipExtension
+    [switch]$SkipExtension,
+    [switch]$SkipPackages
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,7 +41,7 @@ Write-Host "=================================" -ForegroundColor Cyan
 Write-Host ""
 
 # ---- Step 1: Create centralized project memory directories ----
-Write-Host "[1/4] Creating project memory structure..." -ForegroundColor Yellow
+Write-Host "[1/5] Creating project memory structure..." -ForegroundColor Yellow
 $projectName = Split-Path $ProjectDir -Leaf
 $projMemDir = Join-Path $HomeDir ".pi" "agent" "memory" "projects" $projectName
 $projMemoriesDir = Join-Path $projMemDir "memories"
@@ -44,7 +50,7 @@ New-Item -ItemType Directory -Path (Join-Path $projMemoriesDir "decisions") -For
 Write-Host "  ✅ $projMemDir" -ForegroundColor Green
 
 # ---- Step 2: Copy template files to centralized location ----
-Write-Host "[2/4] Copying template files..." -ForegroundColor Yellow
+Write-Host "[2/5] Copying template files..." -ForegroundColor Yellow
 $templateDir = Join-Path $ScriptRoot "templates" "memories"
 
 $templateFiles = @("facts.md", "preferences.md", "decisions.md", "events.md")
@@ -73,25 +79,56 @@ if (-not (Test-Path $notebookDst)) {
 
 # ---- Step 3: Install / update extension ----
 if (-not $SkipExtension) {
-    Write-Host "[3/4] Installing extension..." -ForegroundColor Yellow
+    Write-Host "[3/5] Installing extension..." -ForegroundColor Yellow
     $extDir = Join-Path $HomeDir ".pi" "agent" "extensions"
     New-Item -ItemType Directory -Path $extDir -Force | Out-Null
 
-    $src = Join-Path $ScriptRoot "extensions" "memory.ts"
-    $dst = Join-Path $extDir "memory.ts"
-    Copy-Item $src $dst -Force
+    # Copy all .ts extension files
+    $srcDir = Join-Path $ScriptRoot "extensions"
+    Get-ChildItem -Path $srcDir -Filter "*.ts" | ForEach-Object {
+        Copy-Item $_.FullName (Join-Path $extDir $_.Name) -Force
+    }
     # Copy module directory
-    $moduleSrc = Join-Path $ScriptRoot "extensions" "memory"
+    $moduleSrc = Join-Path $srcDir "memory"
     $moduleDst = Join-Path $extDir "memory"
     if (Test-Path $moduleDst) { Remove-Item $moduleDst -Recurse -Force }
     Copy-Item $moduleSrc $moduleDst -Recurse -Force
-    Write-Host "  ✅ Installed extension to ${extDir}\memory.ts + memory\" -ForegroundColor Green
+    Write-Host "  ✅ Installed extension to $extDir" -ForegroundColor Green
 } else {
-    Write-Host "[3/4] Skipping extension installation (--SkipExtension)" -ForegroundColor Gray
+    Write-Host "[3/5] Skipping extension installation (--SkipExtension)" -ForegroundColor Gray
 }
 
-# ---- Step 4: Create global core-prompt (first time only) ----
-Write-Host "[4/4] Setting up global core-prompt..." -ForegroundColor Yellow
+# ---- Step 4: Install required Pi packages ----
+if (-not $SkipPackages) {
+    Write-Host "[4/5] Installing required Pi packages..." -ForegroundColor Yellow
+    
+    # Check if pi command is available
+    $piCommand = Get-Command pi -ErrorAction SilentlyContinue
+    if (-not $piCommand) {
+        Write-Host "  ⚠️  'pi' command not found in PATH" -ForegroundColor Yellow
+        Write-Host "  Please install Pi packages manually:" -ForegroundColor Yellow
+        Write-Host "    pi install npm:pi-subagents" -ForegroundColor White
+        Write-Host "    pi install npm:context-mode" -ForegroundColor White
+        Write-Host "    pi install npm:pi-mcp-adapter" -ForegroundColor White
+    } else {
+        $packages = @("pi-subagents", "context-mode", "pi-mcp-adapter")
+        foreach ($pkg in $packages) {
+            Write-Host "  Installing $pkg..." -ForegroundColor White
+            try {
+                $output = & pi install "npm:$pkg" 2>&1
+                Write-Host "  ✅ $pkg installed" -ForegroundColor Green
+            } catch {
+                Write-Host "  ⚠️  Failed to install $pkg (may already be installed)" -ForegroundColor Yellow
+            }
+        }
+        Write-Host "  ✅ Pi packages installation complete" -ForegroundColor Green
+    }
+} else {
+    Write-Host "[4/5] Skipping Pi package installation (--SkipPackages)" -ForegroundColor Gray
+}
+
+# ---- Step 5: Create global core-prompt (first time only) ----
+Write-Host "[5/5] Setting up global core-prompt..." -ForegroundColor Yellow
 $globalMemoryDir = Join-Path $HomeDir ".pi" "agent" "memory"
 $globalPersonalDir = Join-Path $globalMemoryDir "personal"
 New-Item -ItemType Directory -Path $globalPersonalDir -Force | Out-Null

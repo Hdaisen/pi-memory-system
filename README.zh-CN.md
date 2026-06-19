@@ -129,6 +129,23 @@ cat ~/.pi/agent/memory/projects/<name>/turns/extraction-error.log
 - Node.js 18+
 - Python 3（用于 `run_extraction.py`）
 
+### 必需的 Pi 包
+
+记忆系统依赖以下 Pi 包（`init.sh`/`init.ps1` 会自动安装）：
+
+| 包名 | 用途 |
+|:--------|:--------|
+| `pi-subagents` | 核心依赖 — 驱动 memory-extractor 子代理 |
+| `context-mode` | 上下文管理 — 处理历史裁剪和上下文优化 |
+| `pi-mcp-adapter` | MCP 适配器 — 为子代理提供工具集成 |
+
+如需手动安装：
+```bash
+pi install npm:pi-subagents
+pi install npm:context-mode
+pi install npm:pi-mcp-adapter
+```
+
 ### 安装
 
 ```bash
@@ -147,7 +164,8 @@ init 脚本会：
 1. 创建 `~/.pi/agent/memory/projects/<name>/` 目录结构
 2. 复制模板文件（小本本、记忆条目模板）
 3. 安装扩展（`memory.ts` + `memory/` 模块）到 `~/.pi/agent/extensions/`
-4. 设置全局 `core-prompt.md` 和 `rules.md`（仅首次）
+4. 安装必需的 Pi 包（`pi-subagents`、`context-mode`、`pi-mcp-adapter`）
+5. 设置全局 `core-prompt.md` 和 `rules.md`（仅首次）
 
 然后重启 Pi 或运行 `/reload`。
 
@@ -213,6 +231,8 @@ memories/
 pi-memory-system/
 ├── extensions/
 │   ├── memory.ts              # 入口文件（串联钩子、工具、命令）
+│   ├── auto.ts                # Spec/任务自动化（基于 pi-subagents + 记忆系统）
+│   ├── ocr.ts                 # OCR 工具，用于图片/PDF 文本提取
 │   └── memory/
 │       ├── config.ts          # HOME、PATHS、项目名检测
 │       ├── utils.ts           # safeRead、extractLinks、resolveLink、walkMarkdownFiles
