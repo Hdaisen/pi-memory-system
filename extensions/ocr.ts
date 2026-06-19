@@ -2,7 +2,7 @@
  * PaddleOCR Extension for Pi
  *
  * PP-OCRv6 OCR — extract text from images/PDFs.
- * Requires WSL2 with PaddleOCR installed.
+ * Requires WSL2 with PaddleOCR installed (Windows) or paddleocr-cli in PATH (Linux/macOS).
  *
  * Usage:
  *   /ocr <image_path>      — OCR an image, show results
@@ -14,6 +14,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as os from "node:os";
 import { execSync } from "node:child_process";
 
 interface OCRData {
@@ -32,12 +33,31 @@ function toWslPath(windowsPath: string): string {
   return p;
 }
 
-function runPaddleOCR(path: string): OCRData[] {
-  const wslPath = toWslPath(path);
-  const escaped = wslPath.replace(/'/g, "'\\''");
-  const cmd = `wsl bash -ic "export PATH=\\$HOME/.local/bin:\\$PATH && paddleocr-cli '${escaped}'"`;
-  const stdout = execSync(cmd, { timeout: 60_000, encoding: "utf-8" });
-  return JSON.parse(stdout);
+function runPaddleOCR(filePath: string): OCRData[] {
+  const platform = os.platform();
+  
+  if (platform === 'win32') {
+    // Windows with WSL
+    const wslPath = toWslPath(filePath);
+    const escaped = wslPath.replace(/'/g, "'\\''");
+    const cmd = `wsl bash -ic "export PATH=\\$HOME/.local/bin:\\$PATH && paddleocr-cli '${escaped}'"`;
+    const stdout = execSync(cmd, { timeout: 60_000, encoding: "utf-8" });
+    return JSON.parse(stdout);
+  } else {
+    // Linux/macOS - try local paddleocr-cli command
+    // First check if paddleocr-cli is available in PATH
+    try {
+      execSync('which paddleocr-cli', { encoding: "utf-8", timeout: 5000, stdio: ['pipe', 'pipe', 'ignore'] });
+    } catch {
+      throw new Error('paddleocr-cli not found in PATH. Please install it first.');
+    }
+    
+    // Run paddleocr-cli locally
+    const escaped = filePath.replace(/'/g, "'\\''");
+    const cmd = `paddleocr-cli '${escaped}'`;
+    const stdout = execSync(cmd, { timeout: 60_000, encoding: "utf-8" });
+    return JSON.parse(stdout);
+  }
 }
 
 export default function ocrExtension(pi: ExtensionAPI) {

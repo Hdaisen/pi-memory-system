@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { execSync } from "node:child_process";
 
 let _wslSymlinkChecked = false;
@@ -9,10 +10,17 @@ let _wslSymlinkChecked = false;
  * when the WSL username differs from the Windows username.
  * This ensures bash commands (which run in WSL) can find memory files.
  * Cached: only runs execSync once per process.
+ * 
+ * Note: This function is only relevant on Windows with WSL.
+ * On Linux/macOS, it does nothing.
  */
 export function ensureWslSymlink(): void {
   if (_wslSymlinkChecked) return;
   _wslSymlinkChecked = true;
+  
+  // Skip on non-Windows platforms
+  if (os.platform() !== 'win32') return;
+  
   try {
     // Check if WSL is available
     const wslPath = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "wsl.exe");
@@ -62,31 +70,57 @@ export function isBinaryFile(filePath: string): boolean {
 }
 
 /**
- * Convert a binary file to Markdown via MarkItDown (WSL).
+ * Convert a binary file to Markdown via MarkItDown.
  * Returns Markdown text on success, or null if conversion fails.
+ * 
+ * On Windows: Uses WSL with markitdown installed in ~/.markitdown-venv/
+ * On Linux/macOS: Uses local markitdown command if available
  */
 export function convertWithMarkitdown(filePath: string): string | null {
   try {
-    // Resolve wsl.exe
-    const wslExe = process.env.WSL_EXE || "wsl.exe";
+    const platform = os.platform();
+    
+    if (platform === 'win32') {
+      // Windows with WSL
+      const wslExe = process.env.WSL_EXE || "wsl.exe";
+      
+      // Convert Windows path → WSL path via wslpath
+      const wslPath = execSync(
+        `${wslExe} wslpath -u "${filePath.replace(/\\/g, "/")}"`,
+        { encoding: "utf-8", timeout: 5000 },
+      ).trim();
 
-    // Convert Windows path → WSL path via wslpath
-    const wslPath = execSync(
-      `${wslExe} wslpath -u "${filePath.replace(/\\/g, "/")}"`,
-      { encoding: "utf-8", timeout: 5000 },
-    ).trim();
+      if (!wslPath) return null;
 
-    if (!wslPath) return null;
+      // Run markitdown in WSL
+      const markitdownCmd = `${wslExe} ~/.markitdown-venv/bin/markitdown "${wslPath}"`;
+      const mdOutput = execSync(markitdownCmd, {
+        encoding: "utf-8",
+        timeout: 60000,
+        maxBuffer: 50 * 1024 * 1024, // 50MB max output
+      });
 
-    // Run markitdown in WSL
-    const markitdownCmd = `${wslExe} ~/.markitdown-venv/bin/markitdown "${wslPath}"`;
-    const mdOutput = execSync(markitdownCmd, {
-      encoding: "utf-8",
-      timeout: 60000,
-      maxBuffer: 50 * 1024 * 1024, // 50MB max output
-    });
+      return mdOutput || null;
+    } else {
+      // Linux/macOS - try local markitdown command
+      // First check if markitdown is available in PATH
+      try {
+        execSync('which markitdown', { encoding: "utf-8", timeout: 5000, stdio: ['pipe', 'pipe', 'ignore'] });
+      } catch {
+        // markitdown not found in PATH
+        return null;
+      }
+      
+      // Run markitdown locally
+      const markitdownCmd = `markitdown "${filePath}"`;
+      const mdOutput = execSync(markitdownCmd, {
+        encoding: "utf-8",
+        timeout: 60000,
+        maxBuffer: 50 * 1024 * 1024, // 50MB max output
+      });
 
-    return mdOutput || null;
+      return mdOutput || null;
+    }
   } catch {
     return null;
   }

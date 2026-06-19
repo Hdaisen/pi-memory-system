@@ -652,13 +652,19 @@ ${params.content}${relatedLine}
       const md = convertWithMarkitdown(filePath);
 
       if (md === null) {
+        const platform = require('os').platform();
+        let errorMsg = `❌ Conversion failed.`;
+        
+        if (platform === 'win32') {
+          errorMsg += ` Make sure MarkItDown is installed in WSL:\n  ~/.markitdown-venv/bin/markitdown\n\nOr install it: pip install markitdown (in WSL venv at ~/.markitdown-venv/)`;
+        } else {
+          errorMsg += ` Make sure MarkItDown is installed:\n  pip install markitdown\n\nOr install it in a virtual environment: python3 -m venv ~/.markitdown-venv && ~/.markitdown-venv/bin/pip install markitdown`;
+        }
+        
         return {
           content: [{
             type: "text",
-            text: `❌ Conversion failed. Make sure MarkItDown is installed in WSL:
-  ~/.markitdown-venv/bin/markitdown
-
-Or install it: pip install markitdown (in WSL venv at ~/.markitdown-venv/)`,
+            text: errorMsg,
           }],
           details: {},
           isError: true,

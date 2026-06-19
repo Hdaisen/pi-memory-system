@@ -16,11 +16,11 @@ PROJECT_DIR="${1:-$(pwd)}"
 SKIP_EXTENSION=false
 
 # Handle --skip-extension flag
-if [ "$1" = "--skip-extension" ]; then
+if [ "${1:-}" = "--skip-extension" ]; then
     SKIP_EXTENSION=true
     PROJECT_DIR="$(pwd)"
 fi
-if [ "$2" = "--skip-extension" ] 2>/dev/null; then
+if [ "${2:-}" = "--skip-extension" ] 2>/dev/null; then
     SKIP_EXTENSION=true
 fi
 
@@ -65,10 +65,12 @@ if [ "$SKIP_EXTENSION" = false ]; then
     echo "[3/4] Installing extension..."
     ext_dir="$HOME_DIR/.pi/agent/extensions"
     mkdir -p "$ext_dir"
-    cp "$SCRIPT_DIR/extensions/memory.ts" "$ext_dir/memory.ts"
+    # Copy all .ts extension files
+    cp "$SCRIPT_DIR/extensions/"*.ts "$ext_dir/"
+    # Copy memory module directory
     rm -rf "$ext_dir/memory"
     cp -r "$SCRIPT_DIR/extensions/memory" "$ext_dir/memory"
-    echo "  ✅ Installed extension to $ext_dir/memory.ts + memory/"
+    echo "  ✅ Installed extension to $ext_dir/"
 else
     echo "[3/4] Skipping extension installation (--skip-extension)"
 fi
