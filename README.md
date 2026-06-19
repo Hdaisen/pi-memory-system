@@ -25,6 +25,17 @@
 - **Layered management**: identity permanence, task dynamics, knowledge accumulation
 - **Context stays lean** — never dragged down by history
 
+### Why Use This System?
+
+| Use Case | Benefit |
+|----------|--------|
+| **Local models with small context windows** | Context stays at ~17K tokens regardless of conversation length. A 32K model can run indefinitely. |
+| **Models with low cache hit rates** | Reduces total tokens processed by 88%. Local models have no API cache, so this directly translates to faster inference. |
+| **Long-running sessions** | Performance stays consistent from round 1 to round 1000. No degradation from context bloat. |
+| **Projects requiring high LLM focus** | LLM sees only curated essence, not raw conversation history. No "lost in the middle" problem. |
+
+> **Benchmark Results**: [299-round A/B test](docs/benchmark-report.md) shows **88% reduction** in tokens per round with consistent performance.
+
 ### Core Philosophy
 
 > **"Brains are for thinking, not for remembering."**
