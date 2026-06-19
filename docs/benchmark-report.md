@@ -99,7 +99,7 @@ The memory-extractor subagent consumes 77% of total cost due to:
 |----------|-----|
 | **Local models with small context windows** | Keeps context at ~17K regardless of conversation length. A 32K model can run indefinitely. |
 | **Models with low cache hit rates** | Local models have no API cache mechanism. This system reduces total tokens processed. |
-| **Projects requiring high LLM focus** | No historical noise. LLM sees only curated essence, not raw conversation. |
+| **Projects requiring high LLM focus** | LLM sees only curated essence, not raw conversation. No context bloat degradation. |
 | **Long-running sessions** | Context never grows. Performance stays consistent from round 1 to round 1000. |
 
 ### Not Ideal For
