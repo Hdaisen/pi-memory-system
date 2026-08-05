@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { HOME, PATHS, getProjectName } from "./config";
-import { safeRead, walkMarkdownFiles } from "./utils";
+import { safeRead, walkMarkdownFiles, lastSections, countSections } from "./utils";
 
 /**
  * Refresh _index.md by scanning all .md files in the memory directory.
@@ -281,13 +281,33 @@ export function runMemoryMaintenance(cwd: string, sessionDir?: string | null): v
       .trim();
   } catch { /* default model */ }
 
-  let cmd = `pi -p --no-session --tools read,write,edit,remember,recall,notebook,forget,supersede`;
+  let cmd = `pi -p --no-session --tools read,write,edit,remember,recall,forget,supersede`;
   if (model && model !== "(default)") cmd += ` --model "${model}"`;
   cmd += ` --append-system-prompt "${cleanerPrompt}"`;
 
+  // 增量输入:海马体只固化"固化点之后剩余"的轮次(节数 % 5)。
+  // 节数 = dialogue-summary.md 中的 "### 轮次" 节数;1-5、6-10... 已被固化点处理。
+  // 输入恒定 ≤ 4 节,不随会话总轮次膨胀;raw 全文不回查不喂入。
+  let inputFile: string | undefined;
+  if (sessionDir) {
+    const summaryFile = path.join(sessionDir, "dialogue-summary.md");
+    const summaryText = safeRead(summaryFile);
+    if (summaryText?.trim()) {
+      const count = countSections(summaryText);
+      const remainder = count % 5; // 1-5、6-10... 已被固化点处理,只固化余数节
+      if (remainder > 0) {
+        inputFile = path.join(sessionDir, "hippocampus-input.md");
+        fs.writeFileSync(inputFile, lastSections(summaryText, remainder), "utf-8");
+      }
+    }
+  }
+
   const prompt =
-    "自动记忆维护（海马体整理）。扫描当前项目的长期记忆（memories/）与全局记忆（personal/），" +
-    "修复格式污染、合并重复条目、supersede 过期/矛盾条目、报告死链与空文件。输出清理报告。";
+    "自动记忆维护（海马体）。\n" +
+    (inputFile
+      ? `任务 0（固化）: 读 cwd 下的 hippocampus-input.md（固化点之后剩余轮次的对话摘要），按标准提炼进长期记忆（remember）。不写 notebook（主 LLM 独家维护）。\n`
+      : `任务 0（固化）: 无剩余轮次（hippocampus-input.md 不存在或为空），跳过固化。\n`) +
+    "任务 1（整理）: 扫描当前项目的长期记忆（memories/）与全局记忆（personal/），修复格式污染、合并重复条目、supersede 过期/矛盾条目、报告死链与空文件。不碰 notebook。输出清理报告。";
 
   const workDir = sessionDir || PATHS.projectDir(cwd);
 

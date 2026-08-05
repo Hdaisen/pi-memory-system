@@ -3,6 +3,23 @@ import * as path from "node:path";
 import { PATHS } from "./config";
 
 /** Safely read a file; returns null if missing or unreadable. */
+/**
+ * Extract the last N "### 轮次" sections from a dialogue-summary.md file.
+ * Used by the consolidation / hippocampus subagents as their incremental
+ * input window: input stays ≤ N sections regardless of total round count,
+ * and the subagent system prompt stays stable (prefix-cache friendly).
+ */
+export function lastSections(text: string, n: number): string {
+  const sections = text.split(/(?=^### 轮次 )/m).filter((s) => /^### 轮次 /.test(s));
+  return sections.slice(-n).join("\n");
+}
+
+/** Count "### 轮次" sections in a dialogue-summary.md file (round count). */
+export function countSections(text: string): number {
+  if (!text) return 0;
+  return text.split(/(?=^### 轮次 )/m).filter((s) => /^### 轮次 /.test(s)).length;
+}
+
 export function safeRead(filePath: string): string | null {
   try {
     return fs.readFileSync(filePath, "utf-8");

@@ -38,7 +38,7 @@
 - 任务状态变化时（开始新任务 / 完成待办 / 新增约束 / 关键决策），立即用 `edit` 更新 notebook.md，不要等轮次结束
 - 只记：当前任务、活跃待办、跨轮约束、关键决策
 - 不记对话细节（那是 dialogue-summary 的职责）
-- 子代理每 5 轮会校对/清理过时内容，但**不要依赖它——每轮保持 notebook 新鲜**
+- 子代理（固化/海马体）**只读不写** notebook——异步并发写会互相覆盖；它是你独家维护的白板
 
 ### Confirmation
 - Use `confirm` tool for interactive y/n prompts (not text questions)

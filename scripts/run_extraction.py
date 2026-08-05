@@ -17,6 +17,7 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -373,6 +374,18 @@ def _forward_stream(src, dest, prefix=b""):
     src.close()
 
 
+def last_sections(text: str, n: int) -> str:
+    """从 dialogue-summary.md 提取最后 n 节(增量窗口)。
+
+    子代理输入 = 增量窗口(本次固化点之间的新轮次),而非全部历史:
+    输入恒定 ≤ n 节(成本不随总轮次增长),system prompt 稳定(前缀缓存可命中)。
+    用行首正则切分,避免首节(无前导换行)被留在头部导致多一节/少计一节。
+    """
+    sections = re.split(r"(?m)^### 轮次 ", text)
+    parts = ["### 轮次 " + p for p in sections[1:] if p.strip()]
+    return "\n\n".join(parts[-n:])
+
+
 def spawn_subagent(turns_dir: Path):
     """启动 pi -p 进程进行记忆提取
 
@@ -387,19 +400,23 @@ def spawn_subagent(turns_dir: Path):
     extractor_prompt = AGENTS_DIR / "memory-extractor.md"
     error_log = turns_dir / "extraction-error.log"
 
-    # 会话目录下最新的 raw-<n>.md(每轮完整备份);旧布局回退 raw.md
-    raw_files = sorted(turns_dir.glob("raw-*.md"))
-    latest_raw = raw_files[-1] if raw_files else (raw_md if raw_md.exists() else None)
-
-    if latest_raw is None:
-        print(f"[extract] ✗ raw file not found, skipping subagent", file=sys.stderr)
+    # 增量输入:只喂本次固化窗口的最后 CONSOLIDATE_EVERY 节(不膨胀、缓存友好)
+    summary_file = turns_dir / "dialogue-summary.md"
+    input_file = turns_dir / "consolidation-input.md"
+    summary_text = summary_file.read_text(encoding="utf-8") if summary_file.exists() else ""
+    if not summary_text.strip():
+        print(f"[extract] ✗ dialogue-summary empty, skipping subagent", file=sys.stderr)
         return
+    input_file.write_text(last_sections(summary_text, CONSOLIDATE_EVERY), encoding="utf-8")
+
+    # 会话目录下最新的 raw-<n>.md 不再自动喂给子代理(体积大,缓存不友好);
+    # 子代理需要细节时自己 read raw-<n>.md 回查。
 
     cmd = [
         "pi",
         "-p",
         "--no-session",
-        "--tools", "read,write,edit,remember,recall,notebook,forget,supersede",
+        "--tools", "read,write,edit,remember,recall,forget,supersede",
     ]
 
     # Read subagent model from config file (set via /subagent-model command)
@@ -417,11 +434,12 @@ def spawn_subagent(turns_dir: Path):
     full_cmd = " ".join(cmd)
 
     # The prompt text to send via stdin (pi -p reads from stdin when piped)
-    # cwd 是当前会话目录(或旧 turns/),子代理在 cwd 下找 dialogue-summary.md / raw-*.md / essence.md
+    # cwd 是当前会话目录。子代理只读增量输入文件 + 沉淀长期记忆,不写 notebook。
     prompt_text = (
-        f"执行记忆固化。你的当前工作目录(cwd)是记忆会话目录,直接在其中操作:\n"
-        f"- 读 dialogue-summary.md(工作记忆累积摘要)和 {latest_raw.name}(本轮完整对话)\n"
-        f"- 校对 notebook(在项目记忆目录 ../notebook.md)、remember 长期记忆\n"
+        f"执行记忆固化。你的当前工作目录(cwd)是记忆会话目录:\n"
+        f"- 读 consolidation-input.md(本次窗口的对话摘要,含关键动作行)\n"
+        f"- 需要细节时 read raw-<n>.md 回查;查重时 read 项目记忆索引 ../<project>/memories/_index.md\n"
+        f"- 只沉淀长期记忆(remember)。不写 notebook(主 LLM 独家维护),不清理记忆文件(海马体的活)\n"
         f"cwd: {turns_dir}"
     )
 
@@ -520,11 +538,11 @@ def main():
             pool.submit(write_raw_md, messages, turns_dir, round_no)
             pool.submit(append_dialogue_summary, messages, turns_dir, round_no)
 
-        # 3. 固化判定:节数即轮次,每 CONSOLIDATE_EVERY 轮跑一次完整子代理
-        #    (essence + notebook 校对 + remember)。中间轮只写文件,不启动子代理。
+        # 3. 固化判定:节数即轮次,每 CONSOLIDATE_EVERY 轮异步跑一次固化子代理
+        #    (只沉淀长期记忆;notebook 由主 LLM 维护)。中间轮只写文件,不启动子代理。
         if round_no % CONSOLIDATE_EVERY == 0:
             spawn_subagent(turns_dir)
-            print(f"[extract] ✓ consolidation complete (round {round_no})", file=sys.stderr)
+            print(f"[extract] ✓ consolidation triggered (round {round_no})", file=sys.stderr)
         else:
             print(f"[extract] · 非固化轮 ({round_no}/{CONSOLIDATE_EVERY}),跳过子代理", file=sys.stderr)
 
