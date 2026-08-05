@@ -5,7 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { HOME, PATHS } from "./config";
 import { safeRead, extractLinks, readLinkedContent, readMemoryIndex, searchMemories } from "./utils";
 import { isBinaryFile, convertWithMarkitdown } from "./markitdown";
-import { ensureProjectDir, refreshIndex, updateTaskWidget } from "./memory-ops";
+import { ensureProjectDir, refreshIndex, updateTaskWidget, shouldRunMaintenance, runMemoryMaintenance, maintenanceSection } from "./memory-ops";
 
 /** Flag: set when the current agent session is aborted (ESC).
  *  ctx.signal is undefined during agent_end (turn already cleaned up),
@@ -394,10 +394,10 @@ export function registerHooks(pi: ExtensionAPI): void {
       }
     }
 
-    // 7. Build memory context — core + rules + notebook + essence + linked + index + search
+    // 7. Build memory context — core + rules + notebook + essence + linked + index + search + maintenance
     let memoryContext = `${coreSection}\n`;
     if (rules) memoryContext += `\n${rules}\n`;
-    memoryContext += `\n---\n\n${notebookSection}${summarySection}${essenceSection}${linkedSection}${memoryIndexSection}${searchResultsSection}\n`;
+    memoryContext += `\n---\n\n${notebookSection}${summarySection}${essenceSection}${linkedSection}${memoryIndexSection}${searchResultsSection}${maintenanceSection()}\n`;
 
     return {
       systemPrompt: event.systemPrompt + `\n\n${memoryContext}`,
@@ -537,6 +537,20 @@ export function registerHooks(pi: ExtensionAPI): void {
     }
 
     updateTaskWidget(cwd, ctx);
+  });
+
+  // ============================================================
+  // session_shutdown: 海马体 — 会话退出时自动整理长期记忆
+  // 每 12 小时最多一次;spawn detached 子进程,不阻塞退出;
+  // 日志落盘 maintenance/clean-<ts>.log,下次会话注入路径。
+  // ============================================================
+  pi.on("session_shutdown", async (event: any, ctx: any) => {
+    if (!ctx?.cwd) return;
+    // 只在真正退出会话时维护;reload/new/resume/fork 是生命周期内切换
+    if (event?.reason !== "quit") return;
+    if (process.env.PI_SUBAGENT === "1") return;
+    if (!shouldRunMaintenance()) return;
+    runMemoryMaintenance(ctx.cwd);
   });
 
   // ============================================================
