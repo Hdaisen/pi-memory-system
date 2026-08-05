@@ -65,7 +65,12 @@ def redact_args(args: dict) -> dict:
     return result
 
 
-def extract_text(content) -> str:
+def extract_text(content, include_thinking: bool = True) -> str:
+    """提取消息的纯文本。
+
+    include_thinking=False 时跳过 thinking 块(对话摘要用——
+    工作记忆只保留实际回复文本,thinking 不注入下一轮上下文)。
+    """
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -78,7 +83,8 @@ def extract_text(content) -> str:
             if bt == "text":
                 texts.append(block.get("text", ""))
             elif bt == "thinking":
-                texts.append(f"[thinking]\n{block.get('thinking', '')}\n[/thinking]")
+                if include_thinking:
+                    texts.append(f"[thinking]\n{block.get('thinking', '')}\n[/thinking]")
             elif bt == "toolCall":
                 continue
             elif bt == "image":
@@ -323,13 +329,14 @@ def append_dialogue_summary(messages: list, turns_dir: Path, round_no: int):
     收录本轮**所有**用户消息与**所有**助手回复(文本部分)——不削减用户信息。
     每轮 append,永久保留(不归档不覆盖);轮次 = 节数,固化点由节数判定。
     """
+    # 只取 text 块,过滤 thinking(工作记忆不注入思考内容)
     user_texts = [
-        extract_text(m.get("content", "")).strip()
+        extract_text(m.get("content", ""), include_thinking=False).strip()
         for m in messages
         if m.get("role") == "user"
     ]
     asst_texts = [
-        extract_text(m.get("content", "")).strip()
+        extract_text(m.get("content", ""), include_thinking=False).strip()
         for m in messages
         if m.get("role") == "assistant"
     ]
