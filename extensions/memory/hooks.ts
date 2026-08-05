@@ -534,21 +534,37 @@ export function registerHooks(pi: ExtensionAPI): void {
 
     const scriptPath = path.join(HOME, ".pi", "agent", "scripts", "run_extraction.py");
 
-    // Try rich progress UI first; fall back to status bar on failure
-    try {
-      await runExtractionWithProgress(ctx, scriptPath, messages, cwd);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      // If ctx.ui.custom is not available, use simple fallback
-      if (msg.includes("not a function") || msg.includes("custom")) {
-        await runExtractionSimple(ctx, scriptPath, messages, cwd);
-      } else {
-        // Real error from the extraction — log it
-        console.warn("[memory] extraction UI error:", msg);
-        // Still try simple fallback
-        try {
+    // 判定本轮是否为固化轮(每 5 轮):是 → 显示完整进度面板;否 → 仅状态栏轻提示。
+    // 非固化轮 extraction 只是写文件(<1s 完成),弹全屏面板会闪一下即消失,体验差。
+    const turnsDir = _sessionDir || path.join(PATHS.projectDir(cwd), "turns");
+    const summaryFile = path.join(turnsDir, "dialogue-summary.md");
+    const roundNo = countSections(safeRead(summaryFile) ?? "") + 1;
+    const isConsolidation = roundNo % 5 === 0;
+
+    if (isConsolidation) {
+      // 固化轮:显示完整进度面板(spinner + 子代理日志)
+      try {
+        await runExtractionWithProgress(ctx, scriptPath, messages, cwd);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        // If ctx.ui.custom is not available, use simple fallback
+        if (msg.includes("not a function") || msg.includes("custom")) {
           await runExtractionSimple(ctx, scriptPath, messages, cwd);
-        } catch { /* already logged */ }
+        } else {
+          // Real error from the extraction — log it
+          console.warn("[memory] extraction UI error:", msg);
+          // Still try simple fallback
+          try {
+            await runExtractionSimple(ctx, scriptPath, messages, cwd);
+          } catch { /* already logged */ }
+        }
+      }
+    } else {
+      // 非固化轮:仅状态栏提示,不弹面板
+      try {
+        await runExtractionSimple(ctx, scriptPath, messages, cwd);
+      } catch (e: unknown) {
+        console.warn("[memory] extraction failed:", e instanceof Error ? e.message : String(e));
       }
     }
 
