@@ -54,6 +54,8 @@ defaultContext: fresh
 6. **失败路径** — 试过但放弃的方案（避免主 LLM 重复尝试）
 7. **遗留问题** — 解决了什么、留下了什么
 
+**与 notebook 去重**：essence 是"上轮发生了什么"的动态记录，notebook 是"当前任务状态"的持久记录。notebook 已写的任务/待办/约束不要重复进 essence——essence 只写 notebook 之外的新信息。
+
 格式：Markdown，代码块保留语言标识。长度不限。
 
 ---

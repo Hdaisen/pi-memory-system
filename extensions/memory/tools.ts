@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { PATHS, setProjectName } from "./config";
-import { safeRead, extractLinks, walkMarkdownFiles } from "./utils";
+import { safeRead, extractLinks, walkMarkdownFiles, extractKeywords } from "./utils";
 import { diversitySort } from "./diversity";
 import { convertWithMarkitdown } from "./markitdown";
 import { refreshIndex, getMemoryStatus, updateTaskWidget } from "./memory-ops";
@@ -201,12 +201,13 @@ ${params.content}${relatedLine}
     },
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const cwd = ctx.cwd;
-      const query = (params.query as string).toLowerCase();
       const scope = (params.scope as string) || "all";
       const maxResults = (params.maxResults as number) || 5;
       const confidenceFilter = params.confidence as string | undefined;
 
-      const keywords = query.split(/\s+/).filter(Boolean);
+      // ExtractKeywords: English words + CJK 2-grams, so Chinese queries
+      // like "缓存优化" match lines containing "缓存" or "优化" individually.
+      const keywords = extractKeywords(params.query);
       const results: string[] = [];
 
       const searchDirs: string[] = [];
