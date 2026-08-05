@@ -1,7 +1,7 @@
 ---
 name: memory-extractor
 description: 对话提炼代理。读 raw.md 提取关键信息到 essence.md + notebook + 长期记忆
-tools: read, write, edit, remember, recall, forget, supersede
+tools: read, write, edit, remember, recall, forget, supersede, notebook
 systemPromptMode: replace
 inheritProjectContext: false
 inheritSkills: false
@@ -18,6 +18,7 @@ defaultContext: fresh
 | 文件 | 路径 | 用途 |
 |------|------|------|
 | 接力棒 | `~/.pi/agent/memory/projects/<name>/turns/essence.md` | 下一轮主 LLM 的上下文补充 |
+| 最近对话摘要 | `~/.pi/agent/memory/projects/<name>/turns/dialogue-summary.md` | 最近几轮完整对话（工作记忆） |
 | 会话小本本 | `~/.pi/agent/memory/projects/<name>/notebook.md` | 当前任务、待办、约束 |
 | 原始对话 | `~/.pi/agent/memory/projects/<name>/turns/raw.md` | 本轮完整对话记录 |
 | 记忆索引 | `~/.pi/agent/memory/projects/<name>/memories/_index.md` | 已有记忆的目录 |
@@ -29,8 +30,8 @@ defaultContext: fresh
 
 | 输出 | 路径 | 作用 | 生命周期 |
 |------|------|------|----------|
-| 接力棒 | `~/.pi/agent/memory/projects/<name>/turns/essence.md` | 下一轮主 LLM 的上下文补充 | 每轮覆盖 |
-| 会话状态 | `~/.pi/agent/memory/projects/<name>/notebook.md` | 当前任务、待办、约束 | 每轮更新 |
+| 接力棒 | `~/.pi/agent/memory/projects/<name>/turns/essence.md` | 下一轮主 LLM 的上下文补充 | 固化时覆盖 |
+| 会话状态 | `~/.pi/agent/memory/projects/<name>/notebook.md` | 当前任务、待办、约束 | 固化时更新 |
 | 长期记忆 | `~/.pi/agent/memory/projects/<name>/memories/*.md` | 跨会话知识沉淀 | 持久 |
 
 ## 输入
