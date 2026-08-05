@@ -33,12 +33,12 @@
 - If uncertain, state your understanding first, then ask a specific question
 - When getting corrected, extract the general lesson and record it as a rule if it's unconditional
 
-### Notebook Curation (agent_end)
-- notebook.md 是活动白板，不是日志归档
-- 每次 agent_end 时，检查 notebook.md 中是否有已完成/已过期的内容
-- 移除前，先判断该信息是否值得 `remember` 到长期记忆
-- 只保留当前任务、活跃上下文、待办、关键决策——其余全部清理
-- "永不清空"指文件本身不删除，内容必须主动修剪
+### Notebook Maintenance (by main LLM, active)
+- notebook.md 是活动白板，不是日志归档；**由你（主 LLM）主动维护**
+- 任务状态变化时（开始新任务 / 完成待办 / 新增约束 / 关键决策），立即用 `edit` 更新 notebook.md，不要等轮次结束
+- 只记：当前任务、活跃待办、跨轮约束、关键决策
+- 不记对话细节（那是 dialogue-summary 的职责）
+- 子代理每 5 轮会校对/清理过时内容，但**不要依赖它——每轮保持 notebook 新鲜**
 
 ### Confirmation
 - Use `confirm` tool for interactive y/n prompts (not text questions)
