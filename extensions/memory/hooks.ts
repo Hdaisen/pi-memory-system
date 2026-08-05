@@ -11,12 +11,19 @@ import { ensureProjectDir, refreshIndex, updateTaskWidget, shouldRunMaintenance,
  *  ctx.signal is undefined during agent_end (turn already cleaned up),
  *  so we track abort state manually via turn_end / tool_call events. */
 let _agentAborted = false;
+let _sessionDir: string | null = null; // 当前会话的短期记忆目录(turns/sessions/<id>)
 
 // ============================================================
 // Extraction progress UI
 // ============================================================
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/** Take the last N sections of a dialogue-summary-style file (split on "### 轮次"). */
+function lastSections(text: string, n: number): string {
+  const sections = text.split(/\n(?=### 轮次)/);
+  return sections.slice(-n).join("\n").trim();
+}
 
 /** Parse a stderr line from run_extraction.py and return structured progress info. */
 interface ProgressUpdate {
@@ -181,7 +188,7 @@ function runExtractionWithProgress(
       childProc = spawn("python3", [scriptPath], {
         cwd,
         stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, PI_SUBAGENT: "1" },
+        env: { ...process.env, PI_SUBAGENT: "1", PI_SESSION_DIR: _sessionDir ?? "" },
         signal: ac.signal,
       });
 
@@ -264,7 +271,7 @@ async function runExtractionSimple(
       const child = spawn("python3", [scriptPath], {
         cwd,
         stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, PI_SUBAGENT: "1" },
+        env: { ...process.env, PI_SUBAGENT: "1", PI_SESSION_DIR: _sessionDir ?? "" },
         signal: ac.signal,
       });
 
@@ -324,6 +331,13 @@ export function registerHooks(pi: ExtensionAPI): void {
   // ============================================================
   pi.on("session_start", async (_event: any, ctx: any) => {
     _agentAborted = false;
+    // 会话隔离:每个会话一个短期记忆目录 turns/sessions/<ts>-<rand>/
+    // 多会话并行时互不覆盖(raw-<n>.md / dialogue-summary.md / essence.md 各自独立)
+    if (ctx?.cwd) {
+      const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      const rand = Math.random().toString(36).slice(2, 6);
+      _sessionDir = path.join(PATHS.projectDir(ctx.cwd), "turns", "sessions", `${ts}-${rand}`);
+    }
     ctx.ui.setStatus("memory", "🧠 🟢");
     updateTaskWidget(ctx.cwd, ctx);
   });
@@ -356,19 +370,19 @@ export function registerHooks(pi: ExtensionAPI): void {
     const notebookSection =
       notebookContent || "# Session Notebook\n（Not initialized）\n";
 
-    // 4. Read dialogue summary (working memory — accumulated turn summaries)
-    //    + essence.md (subagent's distilled analysis, refreshed at consolidation points)
-    const turnsDir = path.join(PATHS.projectDir(cwd), "turns");
-    // Working memory: accumulated dialogue-summary.md (appended each turn,
-    // reset at every consolidation point). Falls back to the single-turn
-    // turn-summary.md for compatibility.
-    const dialogueSummary = safeRead(path.join(turnsDir, "dialogue-summary.md"));
-    const summaryContent = dialogueSummary || safeRead(path.join(turnsDir, "turn-summary.md"));
-    const archiveHint = dialogueSummary
-      ? "\n> 历史对话归档: `turns/summaries/` 下(不注入,可 `read` 查阅)\n"
-      : "";
+    // 4. Read dialogue summary (working memory) + essence.
+    //    会话隔离:优先读当前会话目录(turns/sessions/<id>/),
+    //    兼容旧布局:无会话目录时回退 turns/(旧单会话)。
+    const legacyTurns = path.join(PATHS.projectDir(cwd), "turns");
+    const turnsDir = _sessionDir || legacyTurns;
+    const dialogueSummary = safeRead(path.join(turnsDir, "dialogue-summary.md")) || safeRead(path.join(legacyTurns, "dialogue-summary.md"));
+    // 注入滑动窗口:取最后 SUMMARY_WINDOW 节(工作记忆),早期节永久保留在文件里但不注入。
+    const SUMMARY_WINDOW = 5;
+    const summaryContent = dialogueSummary
+      ? lastSections(dialogueSummary, SUMMARY_WINDOW)
+      : safeRead(path.join(legacyTurns, "turn-summary.md"));
     const summarySection = summaryContent
-      ? `\n\n---\n\n## 最近对话摘要\n\n${summaryContent.trim()}\n${archiveHint}`
+      ? `\n\n---\n\n## 最近对话摘要\n\n${summaryContent.trim()}\n`
       : "";
     const essenceContent = safeRead(path.join(turnsDir, "essence.md"));
     const essenceSection = essenceContent
@@ -561,7 +575,7 @@ export function registerHooks(pi: ExtensionAPI): void {
     if (event?.reason !== "quit") return;
     if (process.env.PI_SUBAGENT === "1") return;
     if (!shouldRunMaintenance()) return;
-    runMemoryMaintenance(ctx.cwd);
+    runMemoryMaintenance(ctx.cwd, _sessionDir);
   });
 
   // ============================================================
