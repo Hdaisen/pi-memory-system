@@ -246,20 +246,23 @@ def format_message(msg: dict, raw_dir: Path) -> str:
     return f"## {role}\n{text}\n\n"
 
 
-def write_raw_md(messages: list, turns_dir: Path) -> Path:
-    """格式化消息 → raw.md"""
+def write_raw_md(messages: list, turns_dir: Path, round_no: int) -> Path:
+    """格式化消息 → raw-<round_no>.md(每轮完整备份,不覆盖)。
+
+    超长工具输出(>5KB)仍截断并存 hash 到 raw/ 目录。
+    """
     raw_dir = turns_dir / "raw"
     ensure_dir(raw_dir)
 
     timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    parts = [f"# Turn — {timestamp}\n\n"]
+    parts = [f"# Turn {round_no} — {timestamp}\n\n"]
     for msg in messages:
         parts.append(format_message(msg, raw_dir))
 
     md = "".join(parts)
-    out_path = turns_dir / "raw.md"
+    out_path = turns_dir / f"raw-{round_no}.md"
     out_path.write_text(md, encoding="utf-8")
-    print(f"[extract] ✓ raw.md: {len(messages)} msgs → {out_path} ({len(md)} bytes)", file=sys.stderr)
+    print(f"[extract] ✓ raw-{round_no}.md: {len(messages)} msgs → {out_path} ({len(md)} bytes)", file=sys.stderr)
     return out_path
 
 
@@ -267,16 +270,22 @@ def write_raw_md(messages: list, turns_dir: Path) -> Path:
 # 对话摘要累积(工作记忆) + 固化轮次控制
 # ============================================================
 
-ROUND_COUNT_FILE = "round-count.txt"
 CONSOLIDATE_EVERY = 5  # 每 5 轮跑一次完整子代理(essence+notebook+remember)
 
 
-def append_dialogue_summary(messages: list, turns_dir: Path):
-    """追加本轮完整对话摘要到 dialogue-summary.md(工作记忆累积文件)。
+def count_rounds(turns_dir: Path) -> int:
+    """当前轮次 = dialogue-summary.md 已有的节数。文件即状态,无额外计数器。"""
+    f = turns_dir / "dialogue-summary.md"
+    if not f.exists():
+        return 0
+    return f.read_text(encoding="utf-8").count("### 轮次")
+
+
+def append_dialogue_summary(messages: list, turns_dir: Path, round_no: int):
+    """追加本轮完整对话摘要一节(带轮次序号)到 dialogue-summary.md。
 
     收录本轮**所有**用户消息与**所有**助手回复(文本部分)——不削减用户信息。
-    固化点归档后清空,因此文件恒 ≤ CONSOLIDATE_EVERY 轮。
-    此文件取代旧的 turn-summary.md(那只是本函数一节内容的子集,冗余)。
+    每轮 append,永久保留(不归档不覆盖);轮次 = 节数,固化点由节数判定。
     """
     user_texts = [
         extract_text(m.get("content", "")).strip()
@@ -297,7 +306,7 @@ def append_dialogue_summary(messages: list, turns_dir: Path):
 
     ensure_dir(turns_dir)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    block = f"### 轮次 {ts}\n\n**用户**:\n{user_block}\n\n**助手**:\n{asst_block}\n"
+    block = f"### 轮次 {round_no} {ts}\n\n**用户**:\n{user_block}\n\n**助手**:\n{asst_block}\n"
     out = turns_dir / "dialogue-summary.md"
     with open(out, "a", encoding="utf-8") as f:
         f.write(block + "\n")
@@ -306,33 +315,6 @@ def append_dialogue_summary(messages: list, turns_dir: Path):
         file=sys.stderr,
     )
 
-
-def read_round_count(turns_dir: Path) -> int:
-    try:
-        return int((turns_dir / ROUND_COUNT_FILE).read_text(encoding="utf-8").strip())
-    except Exception:
-        return 0
-
-
-def archive_dialogue_summary(turns_dir: Path):
-    """固化后归档完整摘要到 turns/summaries/(不覆盖),然后清空工作记忆文件。
-
-    归档文件不主动注入上下文,但保留在 turns/summaries/ 下,
-    主 LLM 或用户可随时 read 查阅历史对话。
-    """
-    f = turns_dir / "dialogue-summary.md"
-    if not f.exists():
-        return
-    content = f.read_text(encoding="utf-8").strip()
-    if not content:
-        return
-    arch_dir = turns_dir / "summaries"
-    arch_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    arch = arch_dir / f"archive-{ts}.md"
-    arch.write_text(f"# 对话归档 {ts}\n\n{content}\n", encoding="utf-8")
-    f.unlink(missing_ok=True)
-    print(f"[extract] ✓ 归档 {len(content)} chars → {arch}", file=sys.stderr)
 
 
 # ============================================================
@@ -362,8 +344,12 @@ def spawn_subagent(turns_dir: Path):
     extractor_prompt = AGENTS_DIR / "memory-extractor.md"
     error_log = turns_dir / "extraction-error.log"
 
-    if not raw_md.exists():
-        print(f"[extract] ✗ raw.md not found, skipping subagent", file=sys.stderr)
+    # 会话目录下最新的 raw-<n>.md(每轮完整备份);旧布局回退 raw.md
+    raw_files = sorted(turns_dir.glob("raw-*.md"))
+    latest_raw = raw_files[-1] if raw_files else (raw_md if raw_md.exists() else None)
+
+    if latest_raw is None:
+        print(f"[extract] ✗ raw file not found, skipping subagent", file=sys.stderr)
         return
 
     cmd = [
@@ -388,11 +374,18 @@ def spawn_subagent(turns_dir: Path):
     full_cmd = " ".join(cmd)
 
     # The prompt text to send via stdin (pi -p reads from stdin when piped)
-    prompt_text = f"Read {raw_md} and perform the memory extraction tasks."
+    # cwd 是当前会话目录(或旧 turns/),子代理在 cwd 下找 dialogue-summary.md / raw-*.md / essence.md
+    prompt_text = (
+        f"执行记忆固化。你的当前工作目录(cwd)是记忆会话目录,直接在其中操作:\n"
+        f"- 读 dialogue-summary.md(工作记忆累积摘要)和 {latest_raw.name}(本轮完整对话)\n"
+        f"- 写 essence.md、校对 notebook(在项目记忆目录 ../notebook.md)、remember 长期记忆\n"
+        f"cwd: {turns_dir}"
+    )
 
-    # 继承环境，但设置 PI_SUBAGENT 防止递归
+    # 继承环境，但设置 PI_SUBAGENT 防止递归 + PI_SESSION_DIR 指向会话目录
     env = os.environ.copy()
     env["PI_SUBAGENT"] = "1"
+    env["PI_SESSION_DIR"] = str(turns_dir)
 
     print("[extract] Starting memory extraction subagent...", file=sys.stderr)
 
@@ -403,7 +396,7 @@ def spawn_subagent(turns_dir: Path):
         proc = subprocess.Popen(
             full_cmd,
             shell=True,
-            cwd=turns_dir.parent,
+            cwd=turns_dir,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -479,32 +472,32 @@ def main():
         print(f"[extract] ✗ messages too few/trivial ({roles}), skipping extraction", file=sys.stderr)
         sys.exit(0)  # exit 0 — nothing to extract, not an error
 
-    # 项目路径推导（和 memory.ts 的 PATHS 一致）
-    cwd = os.getcwd()
-    proj_name = os.path.basename(cwd)
-    turns_dir = PROJECTS_DIR / proj_name / "turns"
+    # 会话目录优先(env PI_SESSION_DIR,由扩展传入);
+    # 兼容旧路径:无 env 时按 cwd 推导(单会话旧布局)。
+    session_dir = os.environ.get("PI_SESSION_DIR")
+    if session_dir:
+        turns_dir = Path(session_dir)
+    else:
+        cwd = os.getcwd()
+        proj_name = os.path.basename(cwd)
+        turns_dir = PROJECTS_DIR / proj_name / "turns"
+    ensure_dir(turns_dir)
 
     try:
-        # 1+2. 并行写 raw.md + 追加对话摘要(工作记忆,含全部用户/助手消息)
-        #      注意:不再单独写 turn-summary.md —— 它是对话摘要一节内容的子集,冗余。
+        # 1+2. 并行写 raw-<n>.md(每轮备份) + 追加对话摘要(工作记忆,含全部用户/助手消息)
+        round_no = count_rounds(turns_dir) + 1  # 本轮轮次 = 已有节数 + 1
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=2) as pool:
-            pool.submit(write_raw_md, messages, turns_dir)
-            pool.submit(append_dialogue_summary, messages, turns_dir)
+            pool.submit(write_raw_md, messages, turns_dir, round_no)
+            pool.submit(append_dialogue_summary, messages, turns_dir, round_no)
 
-        # 3. 固化判定:每 CONSOLIDATE_EVERY 轮跑一次完整子代理
-        #    (essence + notebook + remember)。中间轮只写文件,不启动子代理,
-        #    依赖注入的累积摘要(工作记忆)保持对话连续性。
-        cnt = read_round_count(turns_dir) + 1
-        (turns_dir / ROUND_COUNT_FILE).write_text(str(cnt), encoding="utf-8")
-
-        if cnt % CONSOLIDATE_EVERY == 0:
+        # 3. 固化判定:节数即轮次,每 CONSOLIDATE_EVERY 轮跑一次完整子代理
+        #    (essence + notebook 校对 + remember)。中间轮只写文件,不启动子代理。
+        if round_no % CONSOLIDATE_EVERY == 0:
             spawn_subagent(turns_dir)
-            archive_dialogue_summary(turns_dir)
-            (turns_dir / ROUND_COUNT_FILE).write_text("0", encoding="utf-8")
-            print(f"[extract] ✓ consolidation complete (round {cnt})", file=sys.stderr)
+            print(f"[extract] ✓ consolidation complete (round {round_no})", file=sys.stderr)
         else:
-            print(f"[extract] · 非固化轮 ({cnt}/{CONSOLIDATE_EVERY}),跳过子代理", file=sys.stderr)
+            print(f"[extract] · 非固化轮 ({round_no}/{CONSOLIDATE_EVERY}),跳过子代理", file=sys.stderr)
 
         print("[extract] ✓ extraction complete", file=sys.stderr)
     except Exception as e:

@@ -27,9 +27,8 @@
 | 行为规则 | `rules.md` | Git/代码/交流规则 | 扩展 |
 | 会话小本本 | `projects/<name>/notebook.md` | 当前任务、待办、约束（主 LLM 维护） | 主 LLM + 子代理校对 |
 | 接力棒 | `projects/<name>/turns/essence.md` | 最近固化点的分析提炼 | 子代理 |
-| 最近对话摘要 | `projects/<name>/turns/dialogue-summary.md` | 最近几轮的完整对话（工作记忆） | 扩展 |
-| 历史对话归档 | `projects/<name>/turns/summaries/*.md` | 已固化的历史对话（不注入，可 read） | 扩展 |
-| 原始对话 | `projects/<name>/turns/raw.md` | 本轮完整对话记录 | 扩展 |
+| 最近对话摘要 | `projects/<name>/turns/sessions/<id>/dialogue-summary.md` | 本会话最近几轮的完整对话（工作记忆，每轮 append 永久保留） | 扩展 |
+| 原始对话备份 | `projects/<name>/turns/sessions/<id>/raw-<n>.md` | 每轮完整对话备份（n = 轮次） | 扩展 |
 | 记忆索引 | `projects/<name>/memories/_index.md` | 已有记忆的目录 | 扩展 |
 | 项目记忆 | `projects/<name>/memories/*.md` | 跨轮知识沉淀 | 子代理 |
 | 个人记忆 | `personal/*.md` | 跨项目通用知识 | 子代理 |
@@ -40,13 +39,13 @@
 - 本文件（core-prompt.md）
 - rules.md（行为规则）
 - Memory Index（记忆目录：有哪些记忆文件可查）
-- 最近对话摘要（dialogue-summary.md，最近几轮的完整对话——你的工作记忆）
-- essence.md（最近固化点的分析提炼）
+- 最近对话摘要（本会话 dialogue-summary.md 的最后 5 节——你的工作记忆）
+- essence.md（最近固化点的分析提炼，本会话）
 - notebook.md（会话状态概览——由你每轮维护）
 - Related Memories（当前话题相关的长期记忆，自动搜索 + notebook 链接）
 - 记忆维护日志（最近一次海马体整理的位置）
 
-**原始历史不逐字进入你的上下文。** 需要回溯更早的对话 → `read` `turns/summaries/` 下的归档；需要查长期记忆 → `recall`。
+**原始历史不逐字进入你的上下文。** 需要回溯更早的对话 → `read` 本会话 `raw-<n>.md` 备份；需要查长期记忆 → `recall`。
 
 ## 思考框架
 

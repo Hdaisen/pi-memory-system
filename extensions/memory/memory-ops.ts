@@ -261,7 +261,7 @@ export function shouldRunMaintenance(): boolean {
  * stdio, so it keeps writing after the parent pi process exits (detached +
  * unref). Session end is never blocked by maintenance.
  */
-export function runMemoryMaintenance(cwd: string): void {
+export function runMemoryMaintenance(cwd: string, sessionDir?: string | null): void {
   const cleanerPrompt = path.join(HOME, ".pi", "agent", "agents", "memory-cleaner.md");
   if (!fs.existsSync(cleanerPrompt)) return;
   fs.mkdirSync(MAINTENANCE_DIR, { recursive: true });
@@ -289,11 +289,13 @@ export function runMemoryMaintenance(cwd: string): void {
     "自动记忆维护（海马体整理）。扫描当前项目的长期记忆（memories/）与全局记忆（personal/），" +
     "修复格式污染、合并重复条目、supersede 过期/矛盾条目、报告死链与空文件。输出清理报告。";
 
+  const workDir = sessionDir || PATHS.projectDir(cwd);
+
   try {
     const child = spawn(cmd, {
       shell: true,
-      cwd: PATHS.projectDir(cwd),
-      env: { ...process.env, PI_SUBAGENT: "1" },
+      cwd: workDir,
+      env: { ...process.env, PI_SUBAGENT: "1", PI_SESSION_DIR: sessionDir ?? "" },
       stdio: ["pipe", logFd, logFd],
       detached: true,
     });
