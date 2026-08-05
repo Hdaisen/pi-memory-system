@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { PATHS, getProjectName } from "./config";
+import { spawn } from "node:child_process";
+import { HOME, PATHS, getProjectName } from "./config";
 import { safeRead, walkMarkdownFiles } from "./utils";
 
 /**
@@ -227,4 +228,113 @@ export function updateTaskWidget(cwd: string, ctx: any): void {
   if (lines.length > 0) {
     ctx.ui.setWidget("notebook-tasks", lines);
   }
+}
+
+// ============================================================
+// Memory maintenance (海马体) — 会话结束自动整理长期记忆
+// ============================================================
+
+export const MAINTENANCE_DIR = path.join(HOME, ".pi", "agent", "memory", "maintenance");
+const LAST_RUN_FILE = path.join(MAINTENANCE_DIR, "last-run.json");
+const MAINTENANCE_INTERVAL_MS = 12 * 60 * 60 * 1000; // 每 12 小时最多一次
+
+export function getLastMaintenance():
+  | { lastRun?: string; logFile?: string; project?: string }
+  | null {
+  try {
+    return JSON.parse(fs.readFileSync(LAST_RUN_FILE, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+/** True when no maintenance ran within the interval. */
+export function shouldRunMaintenance(): boolean {
+  const last = getLastMaintenance();
+  if (!last?.lastRun) return true;
+  return Date.now() - new Date(last.lastRun).getTime() >= MAINTENANCE_INTERVAL_MS;
+}
+
+/**
+ * Spawn a detached memory-maintenance subagent (pi -p + memory-cleaner.md).
+ * The subagent's output is appended to maintenance/clean-<ts>.log via file
+ * stdio, so it keeps writing after the parent pi process exits (detached +
+ * unref). Session end is never blocked by maintenance.
+ */
+export function runMemoryMaintenance(cwd: string): void {
+  const cleanerPrompt = path.join(HOME, ".pi", "agent", "agents", "memory-cleaner.md");
+  if (!fs.existsSync(cleanerPrompt)) return;
+  fs.mkdirSync(MAINTENANCE_DIR, { recursive: true });
+
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const logPath = path.join(MAINTENANCE_DIR, `clean-${ts}.log`);
+  const logFd = fs.openSync(logPath, "a");
+  fs.writeSync(
+    logFd,
+    `# Memory Maintenance — ${new Date().toISOString()}\nproject: ${getProjectName(cwd)}\n\n`,
+  );
+
+  let model = "";
+  try {
+    model = fs
+      .readFileSync(path.join(HOME, ".pi", "agent", "memory", "subagent-model.txt"), "utf-8")
+      .trim();
+  } catch { /* default model */ }
+
+  let cmd = `pi -p --no-session --tools read,write,edit,remember,recall,forget,supersede`;
+  if (model && model !== "(default)") cmd += ` --model "${model}"`;
+  cmd += ` --append-system-prompt "${cleanerPrompt}"`;
+
+  const prompt =
+    "自动记忆维护（海马体整理）。扫描当前项目的长期记忆（memories/）与全局记忆（personal/），" +
+    "修复格式污染、合并重复条目、supersede 过期/矛盾条目、报告死链与空文件。输出清理报告。";
+
+  try {
+    const child = spawn(cmd, {
+      shell: true,
+      cwd: PATHS.projectDir(cwd),
+      env: { ...process.env, PI_SUBAGENT: "1" },
+      stdio: ["pipe", logFd, logFd],
+      detached: true,
+    });
+    child.stdin?.write(prompt);
+    child.stdin?.end();
+    child.unref();
+
+    fs.writeFileSync(
+      LAST_RUN_FILE,
+      JSON.stringify(
+        { lastRun: new Date().toISOString(), logFile: logPath, project: getProjectName(cwd) },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    // maintenance/index.md — clickable recent-log index (Obsidian-friendly)
+    const logs = fs
+      .readdirSync(MAINTENANCE_DIR)
+      .filter((f) => f.startsWith("clean-") && f.endsWith(".log"))
+      .sort()
+      .reverse()
+      .slice(0, 20);
+    fs.writeFileSync(
+      path.join(MAINTENANCE_DIR, "index.md"),
+      `# 记忆维护日志\n\n${logs.map((l) => `- [[${l}]]`).join("\n")}\n`,
+      "utf-8",
+    );
+  } catch { /* spawn failure — non-fatal, never block session end */ }
+}
+
+/** Render the maintenance section for before_agent_start injection. */
+export function maintenanceSection(): string {
+  const last = getLastMaintenance();
+  if (!last?.logFile) return "";
+  const t = last.lastRun || "";
+  return (
+    `\n\n---\n\n## 记忆维护日志\n` +
+    `最近整理: ${t} (${last.project || "?"})\n` +
+    `日志文件: ${last.logFile}\n` +
+    `全部日志: ${MAINTENANCE_DIR}\\index.md\n`
+  );
 }
