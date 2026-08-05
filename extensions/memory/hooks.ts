@@ -13,6 +13,32 @@ import { ensureProjectDir, refreshIndex, updateTaskWidget, maintenanceSection, s
 let _agentAborted = false;
 let _sessionDir: string | null = null; // 当前会话的短期记忆目录(turns/sessions/<id>)
 
+/**
+ * 会话身份锚点 = Pi 的 session file 名(去扩展名)。
+ * session_start 会在 /reload、/resume、/fork 等场景对**同一个**逻辑会话再次触发,
+ * 若每次都重新生成目录会导致:新开文件夹 + 轮次从 1 重算(重大 BUG)。
+ * 以 session file 为身份,同一会话始终复用同一目录。
+ */
+function getSessionAnchor(ctx: any): string {
+  try {
+    const sf = ctx?.sessionManager?.getSessionFile();
+    if (sf) return path.basename(sf).replace(/\.jsonl?$/i, "");
+  } catch { /* ephemeral session — 无 session file */ }
+  return "";
+}
+
+/** 查找 cwd 下已存在的同锚点会话目录(进程重启 / reload 恢复用),取最新一个。 */
+function findExistingSessionDir(cwd: string, anchor: string): string {
+  if (!anchor) return "";
+  const sessionsDir = path.join(PATHS.projectDir(cwd), "turns", "sessions");
+  if (!fs.existsSync(sessionsDir)) return "";
+  const matches = fs
+    .readdirSync(sessionsDir)
+    .filter((d) => d.endsWith("-" + anchor))
+    .sort();
+  return matches.length > 0 ? path.join(sessionsDir, matches[matches.length - 1]) : "";
+}
+
 // ============================================================
 // Extraction progress UI
 // ============================================================
@@ -325,12 +351,24 @@ export function registerHooks(pi: ExtensionAPI): void {
   // ============================================================
   pi.on("session_start", async (_event: any, ctx: any) => {
     _agentAborted = false;
-    // 会话隔离:每个会话一个短期记忆目录 turns/sessions/<ts>-<rand>/
-    // 多会话并行时互不覆盖(raw-<n>.md / dialogue-summary.md / essence.md 各自独立)
+    // 会话隔离 + 会话稳定:目录名 = <ts>-<rand>-<session-file 锚点>。
+    // 同一 session file 始终复用同一目录(reload/resume 重触发时不新开、轮次不重置)。
     if (ctx?.cwd) {
-      const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      const rand = Math.random().toString(36).slice(2, 6);
-      _sessionDir = path.join(PATHS.projectDir(ctx.cwd), "turns", "sessions", `${ts}-${rand}`);
+      const anchor = getSessionAnchor(ctx);
+      const existing = findExistingSessionDir(ctx.cwd, anchor);
+      if (existing) {
+        // 已有同锚点目录(进程重启后恢复 / reload 重触发)→ 复用
+        _sessionDir = existing;
+      } else {
+        const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        const rand = Math.random().toString(36).slice(2, 6);
+        _sessionDir = path.join(
+          PATHS.projectDir(ctx.cwd),
+          "turns",
+          "sessions",
+          anchor ? `${ts}-${rand}-${anchor}` : `${ts}-${rand}`,
+        );
+      }
     }
     ctx.ui.setStatus("memory", "🧠 🟢");
     updateTaskWidget(ctx.cwd, ctx);
@@ -533,6 +571,15 @@ export function registerHooks(pi: ExtensionAPI): void {
     if (!messages || !Array.isArray(messages) || messages.length < 2) return;
 
     const scriptPath = path.join(HOME, ".pi", "agent", "scripts", "run_extraction.py");
+
+    // 防御性锚定:本轮写入前以 session file 锚点重新解析目录。
+    // 若会话中途 reload 导致 session_start 重触发、_sessionDir 被重置,
+    // 这里把写入目标纠正回真正的会话目录,避免轮次分裂。
+    const anchor = getSessionAnchor(ctx);
+    if (anchor) {
+      const existing = findExistingSessionDir(cwd, anchor);
+      if (existing) _sessionDir = existing;
+    }
 
     // 判定本轮是否为固化轮(每 5 轮):是 → 显示完整进度面板;否 → 仅状态栏轻提示。
     // 非固化轮 extraction 只是写文件(<1s 完成),弹全屏面板会闪一下即消失,体验差。
