@@ -356,14 +356,17 @@ export function registerHooks(pi: ExtensionAPI): void {
     const notebookSection =
       notebookContent || "# Session Notebook\n（Not initialized）\n";
 
-    // 4. Read turn-summary.md (main brain's last response, written by extension)
-    //    + essence.md (subagent's distilled handoff, if available)
+    // 4. Read dialogue summary (working memory — accumulated turn summaries)
+    //    + essence.md (subagent's distilled analysis, refreshed at consolidation points)
     const turnsDir = path.join(PATHS.projectDir(cwd), "turns");
-    const summaryContent = safeRead(path.join(turnsDir, "turn-summary.md"));
+    // Working memory: accumulated dialogue-summary.md (appended each turn,
+    // reset at every consolidation point). Falls back to the single-turn
+    // turn-summary.md for compatibility.
+    const dialogueSummary = safeRead(path.join(turnsDir, "dialogue-summary.md"));
+    const summaryContent = dialogueSummary || safeRead(path.join(turnsDir, "turn-summary.md"));
     const summarySection = summaryContent
-      ? `\n\n---\n\n## 上轮摘要\n\n${summaryContent.trim()}\n`
+      ? `\n\n---\n\n## 最近对话摘要\n\n${summaryContent.trim()}\n`
       : "";
-    // essence.md is still read for subagent's analysis (optional enrichment)
     const essenceContent = safeRead(path.join(turnsDir, "essence.md"));
     const essenceSection = essenceContent
       ? `\n\n---\n\n## 子代理分析\n\n${essenceContent.trim()}\n`
@@ -394,10 +397,13 @@ export function registerHooks(pi: ExtensionAPI): void {
       }
     }
 
-    // 7. Build memory context — core + rules + notebook + essence + linked + index + search + maintenance
+    // 7. Build memory context — stable-first ordering for DeepSeek prefix caching:
+    //    core + rules + memory index + dialogue summary are stable/append-only
+    //    (they form the cache-hit prefix); essence/notebook change only at
+    //    consolidation points (every 5 turns); related/maintenance vary per turn.
     let memoryContext = `${coreSection}\n`;
     if (rules) memoryContext += `\n${rules}\n`;
-    memoryContext += `\n---\n\n${notebookSection}${summarySection}${essenceSection}${linkedSection}${memoryIndexSection}${searchResultsSection}${maintenanceSection()}\n`;
+    memoryContext += `\n---\n\n${memoryIndexSection}${summarySection}${essenceSection}${notebookSection}${linkedSection}${searchResultsSection}${maintenanceSection()}\n`;
 
     return {
       systemPrompt: event.systemPrompt + `\n\n${memoryContext}`,
