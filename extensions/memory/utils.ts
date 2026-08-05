@@ -162,8 +162,10 @@ export function searchMemories(
   cwd: string,
   maxResults: number = 5,
 ): string[] {
-  if (!userPrompt || userPrompt.trim().length < 10) return [];
+  if (!userPrompt) return [];
 
+  // 用关键词数而非字符数判断:中文信息密度高,"记忆系统注入问题"(8字符)
+  // 是完整查询,但英文 8 字符可能是噪音。有实质关键词即可搜索。
   const keywords = extractKeywords(userPrompt);
   if (keywords.length === 0) return [];
 
