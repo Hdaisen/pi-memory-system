@@ -5,14 +5,27 @@
 ### Git Workflow
 - After modifying `memory.ts`, always sync to `F:/projects/pi-memory-system/` immediately
 - After syncing to the project, always commit
-- After committing, always push to remote (unset proxy if SSH times out)
-- Do NOT ask for confirmation before pushing — just push.
+- Main branch is protected — use branch + PR workflow:
+  ```bash
+  git checkout -b feat/<description>
+  git add -A && git commit -m "<description>"
+  git push origin feat/<description>
+  gh pr create --base main --title "<description>" --body "<details>"
+  gh pr merge --squash
+  ```
+- Do NOT ask for confirmation for routine branch/PR operations
 - If push fails, try HTTPS fallback without asking.
 
 ### Code Changes
 - All extension code lives at `C:\Users\10342\.pi\agent\extensions\`
 - The git project at `F:\projects\pi-memory-system\` is the downstream — copy TO it, not FROM it
-- After every code change, sync to git project, commit, and push
+- After every code change, sync to git project, commit, and push via branch + PR
+
+### WSL Path Conversion
+- When user provides a Windows path (e.g., `F:\projects\...` or `C:\Users\...`), auto-convert to WSL format (`/mnt/f/projects/...` or `/mnt/c/Users/...`) when running bash/wsl commands
+- Do NOT repeatedly fail trying to access Windows paths directly in WSL
+- Conversion rule: `X:\path` → `/mnt/x/path` (lowercase drive letter)
+- Exception: when using Windows-native tools (PowerShell, cmd), keep Windows paths as-is
 
 ### Communication
 - No compliments, no fluff, no "好问题" / "好想法"
