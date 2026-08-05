@@ -61,9 +61,9 @@ export function registerCommands(pi: ExtensionAPI): void {
       cmd += ` --append-system-prompt "${CLEANER_PROMPT}"`;
 
       const prompt =
-        "扫描当前项目的长期记忆（memories/ 目录）并执行清理任务：" +
+        "记忆维护（海马体整理）。扫描当前项目的长期记忆（memories/）与全局记忆（personal/）并执行清理：" +
         "修复格式污染、合并重复条目、supersede 过期/矛盾条目、报告死链与空文件。" +
-        "最后输出清理报告。";
+        "不碰 notebook.md（主 LLM 独家维护），不碰 turns/ 短期记忆。最后输出清理报告。";
 
       console.log("🧹 Running memory cleaner subagent...");
       return new Promise<void>((resolve) => {

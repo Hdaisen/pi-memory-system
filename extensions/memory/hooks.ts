@@ -3,9 +3,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { HOME, PATHS } from "./config";
-import { safeRead, extractLinks, readLinkedContent, readMemoryIndex, searchMemories } from "./utils";
+import { safeRead, extractLinks, readLinkedContent, readMemoryIndex, searchMemories, lastSections, countSections } from "./utils";
 import { isBinaryFile, convertWithMarkitdown } from "./markitdown";
-import { ensureProjectDir, refreshIndex, updateTaskWidget, shouldRunMaintenance, runMemoryMaintenance, maintenanceSection } from "./memory-ops";
+import { ensureProjectDir, refreshIndex, updateTaskWidget, maintenanceSection, spawnConsolidationSubagent, CONSOLIDATE_AT_SESSION_END } from "./memory-ops";
 
 /** Flag: set when the current agent session is aborted (ESC).
  *  ctx.signal is undefined during agent_end (turn already cleaned up),
@@ -18,12 +18,6 @@ let _sessionDir: string | null = null; // 当前会话的短期记忆目录(turn
 // ============================================================
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-/** Take the last N sections of a dialogue-summary-style file (split on "### 轮次"). */
-function lastSections(text: string, n: number): string {
-  const sections = text.split(/\n(?=### 轮次)/);
-  return sections.slice(-n).join("\n").trim();
-}
 
 /** Parse a stderr line from run_extraction.py and return structured progress info. */
 interface ProgressUpdate {
@@ -562,17 +556,31 @@ export function registerHooks(pi: ExtensionAPI): void {
   });
 
   // ============================================================
-  // session_shutdown: 海马体 — 会话退出时自动整理长期记忆
-  // 每 12 小时最多一次;spawn detached 子进程,不阻塞退出;
-  // 日志落盘 maintenance/clean-<ts>.log,下次会话注入路径。
+  // session_shutdown:会话结束时补固化(非自动海马体)
+  // 海马体(记忆整理)改为手动 /memory-clean 触发,不再自动——
+  // 避免频繁会话/长期不用时做无用功、浪费钱。
+  // 会话结束只做一件事:若余数(节数 % 5)≥ 3,异步补跑固化子代理,
+  // 处理未固化的剩余轮次(短会话 1-2 节不触发)。
   // ============================================================
   pi.on("session_shutdown", async (event: any, ctx: any) => {
     if (!ctx?.cwd) return;
-    // 只在真正退出会话时维护;reload/new/resume/fork 是生命周期内切换
+    // 只在真正退出会话时补固化;reload/new/resume/fork 是生命周期内切换
     if (event?.reason !== "quit") return;
     if (process.env.PI_SUBAGENT === "1") return;
-    if (!shouldRunMaintenance()) return;
-    runMemoryMaintenance(ctx.cwd, _sessionDir);
+    if (!_sessionDir) return;
+    try {
+      const summaryFile = path.join(_sessionDir, "dialogue-summary.md");
+      const summary = fs.readFileSync(summaryFile, "utf-8");
+      const remainder = countSections(summary) % 5;
+      if (remainder >= CONSOLIDATE_AT_SESSION_END) {
+        fs.writeFileSync(
+          path.join(_sessionDir, "consolidation-input.md"),
+          lastSections(summary, remainder),
+          "utf-8",
+        );
+        spawnConsolidationSubagent(_sessionDir);
+      }
+    } catch { /* non-fatal — never block session end */ }
   });
 
   // ============================================================

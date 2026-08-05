@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { HOME, PATHS, getProjectName } from "./config";
-import { safeRead, walkMarkdownFiles, lastSections, countSections } from "./utils";
+import { safeRead, walkMarkdownFiles } from "./utils";
 
 /**
  * Refresh _index.md by scanning all .md files in the memory directory.
@@ -236,7 +236,9 @@ export function updateTaskWidget(cwd: string, ctx: any): void {
 
 export const MAINTENANCE_DIR = path.join(HOME, ".pi", "agent", "memory", "maintenance");
 const LAST_RUN_FILE = path.join(MAINTENANCE_DIR, "last-run.json");
-const MAINTENANCE_INTERVAL_MS = 12 * 60 * 60 * 1000; // 每 12 小时最多一次
+
+// 会话结束补固化阈值:剩余未固化节数 ≥ 3 才补跑(短会话不触发,避免频繁/浪费)
+export const CONSOLIDATE_AT_SESSION_END = 3;
 
 export function getLastMaintenance():
   | { lastRun?: string; logFile?: string; project?: string }
@@ -255,13 +257,17 @@ export function shouldRunMaintenance(): boolean {
   return Date.now() - new Date(last.lastRun).getTime() >= MAINTENANCE_INTERVAL_MS;
 }
 
+// 手动命令(memory-clean)不设限频——用户主动触发即跑;
+// 自动路径(session_shutdown)已不再触发海马体。
+const MAINTENANCE_INTERVAL_MS = 12 * 60 * 60 * 1000; // (保留:shouldRunMaintenance 兼容)
+
 /**
  * Spawn a detached memory-maintenance subagent (pi -p + memory-cleaner.md).
- * The subagent's output is appended to maintenance/clean-<ts>.log via file
- * stdio, so it keeps writing after the parent pi process exits (detached +
- * unref). Session end is never blocked by maintenance.
+ * 海马体职责:纯记忆整理(合并重复/修复污染/supersede 过期/报告死链)——
+ * 不读对话、不固化对话(那是固化子代理的活)、不碰 notebook。
+ * 触发:手动 /memory-clean 命令。输出 → maintenance/clean-<ts>.log。
  */
-export function runMemoryMaintenance(cwd: string, sessionDir?: string | null): void {
+export function runMemoryMaintenance(cwd: string): void {
   const cleanerPrompt = path.join(HOME, ".pi", "agent", "agents", "memory-cleaner.md");
   if (!fs.existsSync(cleanerPrompt)) return;
   fs.mkdirSync(MAINTENANCE_DIR, { recursive: true });
@@ -285,37 +291,16 @@ export function runMemoryMaintenance(cwd: string, sessionDir?: string | null): v
   if (model && model !== "(default)") cmd += ` --model "${model}"`;
   cmd += ` --append-system-prompt "${cleanerPrompt}"`;
 
-  // 增量输入:海马体只固化"固化点之后剩余"的轮次(节数 % 5)。
-  // 节数 = dialogue-summary.md 中的 "### 轮次" 节数;1-5、6-10... 已被固化点处理。
-  // 输入恒定 ≤ 4 节,不随会话总轮次膨胀;raw 全文不回查不喂入。
-  let inputFile: string | undefined;
-  if (sessionDir) {
-    const summaryFile = path.join(sessionDir, "dialogue-summary.md");
-    const summaryText = safeRead(summaryFile);
-    if (summaryText?.trim()) {
-      const count = countSections(summaryText);
-      const remainder = count % 5; // 1-5、6-10... 已被固化点处理,只固化余数节
-      if (remainder > 0) {
-        inputFile = path.join(sessionDir, "hippocampus-input.md");
-        fs.writeFileSync(inputFile, lastSections(summaryText, remainder), "utf-8");
-      }
-    }
-  }
-
   const prompt =
-    "自动记忆维护（海马体）。\n" +
-    (inputFile
-      ? `任务 0（固化）: 读 cwd 下的 hippocampus-input.md（固化点之后剩余轮次的对话摘要），按标准提炼进长期记忆（remember）。不写 notebook（主 LLM 独家维护）。\n`
-      : `任务 0（固化）: 无剩余轮次（hippocampus-input.md 不存在或为空），跳过固化。\n`) +
-    "任务 1（整理）: 扫描当前项目的长期记忆（memories/）与全局记忆（personal/），修复格式污染、合并重复条目、supersede 过期/矛盾条目、报告死链与空文件。不碰 notebook。输出清理报告。";
-
-  const workDir = sessionDir || PATHS.projectDir(cwd);
+    "自动记忆维护（海马体整理）。扫描当前项目的长期记忆（memories/）与全局记忆（personal/），" +
+    "修复格式污染、合并重复条目、supersede 过期/矛盾条目、报告死链与空文件。" +
+    "不碰 notebook.md（主 LLM 独家维护），不碰 turns/ 短期记忆。输出清理报告。";
 
   try {
     const child = spawn(cmd, {
       shell: true,
-      cwd: workDir,
-      env: { ...process.env, PI_SUBAGENT: "1", PI_SESSION_DIR: sessionDir ?? "" },
+      cwd: PATHS.projectDir(cwd),
+      env: { ...process.env, PI_SUBAGENT: "1" },
       stdio: ["pipe", logFd, logFd],
       detached: true,
     });
@@ -345,7 +330,52 @@ export function runMemoryMaintenance(cwd: string, sessionDir?: string | null): v
       `# 记忆维护日志\n\n${logs.map((l) => `- [[${l}]]`).join("\n")}\n`,
       "utf-8",
     );
-  } catch { /* spawn failure — non-fatal, never block session end */ }
+  } catch { /* spawn failure — non-fatal */ }
+}
+
+/**
+ * 会话结束补固化:spawn 固化子代理(pi -p + memory-extractor.md),处理
+ * 未固化的余数轮次(consolidation-input.md 由调用方写入)。detached 后台,
+ * 不阻塞退出;输出 → sessionDir/consolidation-<ts>.log。
+ */
+export function spawnConsolidationSubagent(sessionDir: string): void {
+  const extractorPrompt = path.join(HOME, ".pi", "agent", "agents", "memory-extractor.md");
+  if (!fs.existsSync(extractorPrompt)) return;
+
+  let model = "";
+  try {
+    model = fs
+      .readFileSync(path.join(HOME, ".pi", "agent", "memory", "subagent-model.txt"), "utf-8")
+      .trim();
+  } catch { /* default model */ }
+
+  let cmd = `pi -p --no-session --tools read,write,edit,remember,recall,forget,supersede`;
+  if (model && model !== "(default)") cmd += ` --model "${model}"`;
+  cmd += ` --append-system-prompt "${extractorPrompt}"`;
+
+  const prompt =
+    "执行记忆固化（会话结束补跑）。你的当前工作目录(cwd)是记忆会话目录:\n" +
+    "- 读 consolidation-input.md（剩余轮次的对话摘要，含关键动作行）\n" +
+    "- 需要细节时 read raw-<n>.md 回查；查重时 read 项目记忆索引（../<project>/memories/_index.md）\n" +
+    "- 只沉淀长期记忆（remember）。不写 notebook（主 LLM 独家维护），不清理记忆文件（海马体的活）\n" +
+    `cwd: ${sessionDir}`;
+
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const logPath = path.join(sessionDir, `consolidation-${ts}.log`);
+  try {
+    const logFd = fs.openSync(logPath, "a");
+    fs.writeSync(logFd, `# Consolidation (session end) — ${new Date().toISOString()}\n\n`);
+    const child = spawn(cmd, {
+      shell: true,
+      cwd: sessionDir,
+      env: { ...process.env, PI_SUBAGENT: "1", PI_SESSION_DIR: sessionDir },
+      stdio: ["pipe", logFd, logFd],
+      detached: true,
+    });
+    child.stdin?.write(prompt);
+    child.stdin?.end();
+    child.unref();
+  } catch { /* non-fatal */ }
 }
 
 /** Render the maintenance section for before_agent_start injection. */
