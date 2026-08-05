@@ -281,6 +281,41 @@ def count_rounds(turns_dir: Path) -> int:
     return f.read_text(encoding="utf-8").count("### 轮次")
 
 
+# 关键动作提取:白名单工具 + 容错解析(失败降级,不影响摘要主体)
+ACTION_TOOLS = {"edit", "write", "read", "bash", "delete", "move"}
+
+
+def extract_key_actions(messages: list) -> list:
+    """从 messages 的 toolCall 块提取关键动作,返回 ['📝 edit src/a.ts', ...]。
+
+    容错:参数缺失/非 dict → 跳过该动作;宁缺毋滥,绝不产生错误信息。
+    """
+    actions = []
+    for msg in messages:
+        content = msg.get("content", [])
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "toolCall":
+                continue
+            name = block.get("name", "")
+            if name not in ACTION_TOOLS:
+                continue
+            args = block.get("arguments")
+            if not isinstance(args, dict):
+                continue
+            target = args.get("path") or args.get("file") or args.get("from")
+            if name == "bash":
+                cmd = str(args.get("command", "")).replace("\n", " ").strip()[:80]
+                if cmd:
+                    actions.append(f"🖥️ {cmd}")
+            elif target:
+                icon = {"edit": "📝", "write": "➕", "read": "📖", "delete": "🗑️", "move": "↔️"}.get(name, "⚙️")
+                actions.append(f"{icon} {name} {target}")
+            # 其余缺失参数的动作直接跳过
+    return actions[:6]  # 每轮最多 6 个,避免过长
+
+
 def append_dialogue_summary(messages: list, turns_dir: Path, round_no: int):
     """追加本轮完整对话摘要一节(带轮次序号)到 dialogue-summary.md。
 
@@ -306,7 +341,15 @@ def append_dialogue_summary(messages: list, turns_dir: Path, round_no: int):
 
     ensure_dir(turns_dir)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    block = f"### 轮次 {round_no} {ts}\n\n**用户**:\n{user_block}\n\n**助手**:\n{asst_block}\n"
+    # 节标题带 raw 回查链接 + 关键动作行(容错:无动作则省略)
+    actions = extract_key_actions(messages)
+    action_line = f"\n**关键动作**: {' | '.join(actions)}\n" if actions else ""
+    block = (
+        f"### 轮次 {round_no} {ts} → 📄 raw-{round_no}.md\n\n"
+        f"**用户**:\n{user_block}\n\n"
+        f"**助手**:\n{asst_block}\n"
+        f"{action_line}"
+    )
     out = turns_dir / "dialogue-summary.md"
     with open(out, "a", encoding="utf-8") as f:
         f.write(block + "\n")
@@ -378,7 +421,7 @@ def spawn_subagent(turns_dir: Path):
     prompt_text = (
         f"执行记忆固化。你的当前工作目录(cwd)是记忆会话目录,直接在其中操作:\n"
         f"- 读 dialogue-summary.md(工作记忆累积摘要)和 {latest_raw.name}(本轮完整对话)\n"
-        f"- 写 essence.md、校对 notebook(在项目记忆目录 ../notebook.md)、remember 长期记忆\n"
+        f"- 校对 notebook(在项目记忆目录 ../notebook.md)、remember 长期记忆\n"
         f"cwd: {turns_dir}"
     )
 
@@ -387,60 +430,46 @@ def spawn_subagent(turns_dir: Path):
     env["PI_SUBAGENT"] = "1"
     env["PI_SESSION_DIR"] = str(turns_dir)
 
-    print("[extract] Starting memory extraction subagent...", file=sys.stderr)
+    print("[extract] Starting memory consolidation subagent (async, background)...", file=sys.stderr)
 
-    # ── Streaming mode ──
-    # Pipe prompt via stdin (pi -p reads from stdin, command-line prompt arg doesn't work in WSL)
-    # stderr is piped separately (not merged to stdout) so TypeScript progress UI can read it
+    # ── Async mode ──
+    # 子代理 detached 后台运行,不阻塞用户进入下一轮(用户无感,像大脑在睡眠时加工记忆)。
+    # 输出重定向到会话目录 consolidation-<ts>.log,便于事后查阅;失败不抛异常(后台任务)。
+    log_path = turns_dir / f"consolidation-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}.log"
+    try:
+        log_file = open(log_path, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        log_file = None
+    if log_file:
+        log_file.write(f"# Consolidation {datetime.now(timezone.utc).isoformat()}\ncwd: {turns_dir}\n\n")
+
+    flags = 0
+    if os.name == "nt":
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     try:
         proc = subprocess.Popen(
             full_cmd,
             shell=True,
             cwd=turns_dir,
             stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=log_file if log_file else subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
             env=env,
+            creationflags=flags if os.name == "nt" else 0,
+            start_new_session=(os.name != "nt"),
         )
-        # Send prompt via stdin and close
+        # 通过 stdin 发送 prompt 并关闭 → 子代理读到完整输入后独立运行
         proc.stdin.write(prompt_text.encode("utf-8"))
         proc.stdin.close()
+        # 不 wait —— 父进程(python/pi)退出后子代理继续;日志句柄 OS 级 dup,不受影响
+        print(f"[extract] ✓ consolidation subagent spawned in background (log: {log_path.name})", file=sys.stderr)
+        if log_file:
+            log_file.close()
     except Exception as e:
-        error_msg = f"Failed to spawn subagent: {e}"
+        error_msg = f"Failed to spawn consolidation subagent: {e}"
         print(f"[extract] ✗ {error_msg}", file=sys.stderr)
         error_log.write_text(f"# Extraction Error — {datetime.now(timezone.utc).isoformat()}\n\n{error_msg}\n", encoding="utf-8")
-        raise RuntimeError(error_msg)
-
-    # Forward both stdout and stderr to Python's stderr (→ TypeScript progress UI).
-    # Uses threads to avoid blocking on either stream.
-    stderr_bin = sys.stderr.buffer
-    t_out = threading.Thread(target=_forward_stream, args=(proc.stdout, stderr_bin, b"  "), daemon=True)
-    t_err = threading.Thread(target=_forward_stream, args=(proc.stderr, stderr_bin), daemon=True)
-    t_out.start()
-    t_err.start()
-
-    try:
-        proc.wait(timeout=360)  # 最长等 6 分钟，防止子代理卡死导致僵尸进程
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        error_msg = "Subagent timed out after 360s, killed process"
-        print(f"[extract] ✗ {error_msg}", file=sys.stderr)
-        error_log.write_text(f"# Extraction Error — {datetime.now(timezone.utc).isoformat()}\n\n{error_msg}\n", encoding="utf-8")
-        raise RuntimeError(error_msg)
-    finally:
-        t_out.join(timeout=5)
-        t_err.join(timeout=5)
-
-    if proc.returncode == 0:
-        # Success — clear any old error log
-        if error_log.exists():
-            error_log.unlink()
-        print(f"[extract] ✓ subagent: done", file=sys.stderr)
-    else:
-        error_msg = f"subagent failed (exit={proc.returncode})"
-        print(f"[extract] ✗ {error_msg}", file=sys.stderr)
-        error_log.write_text(f"# Extraction Error — {datetime.now(timezone.utc).isoformat()}\n\n{error_msg}\n", encoding="utf-8")
-        raise RuntimeError(error_msg)
+        # 后台任务失败不阻塞主流程
 
 
 # ============================================================

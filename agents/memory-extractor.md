@@ -28,39 +28,20 @@ defaultContext: fresh
 | 个人记忆 | `~/.pi/agent/memory/personal/*.md` | 跨项目通用知识 |
 
 ## 任务
-把本轮原始对话提炼为三样东西：
+把本轮（及间隔轮次）的对话内容提炼为两样东西：
 
 | 输出 | 路径 | 作用 | 生命周期 |
 |------|------|------|----------|
-| 接力棒 | `(cwd)/essence.md` | 下一轮主 LLM 的上下文补充 | 固化时覆盖 |
-| 会话状态 | `~/.pi/agent/memory/projects/<name>/notebook.md` | 当前任务、待办、约束 | 固化时更新 |
+| 会话状态 | `~/.pi/agent/memory/projects/<name>/notebook.md` | 当前任务、待办、约束（主 LLM 每轮维护，你校对） | 持久 |
 | 长期记忆 | `~/.pi/agent/memory/projects/<name>/memories/*.md` | 跨会话知识沉淀 | 持久 |
+
+> essence.md 已废弃：对话信息都在 dialogue-summary.md（主 LLM 每轮直接注入最后 5 轮），无需二次提炼。
 
 ## 输入
 - `(cwd)/dialogue-summary.md` — **最近 N 轮对话摘要**(工作记忆累积,优先阅读;你每 5 轮才运行一次,靠它掌握间隔轮次的内容)
 - `(cwd)/raw-<n>.md` — 本轮完整对话（>5KB 工具输出已截断 + 存 hash）
 - `~/.pi/agent/memory/projects/<name>/notebook.md` — 当前会话小本本
 - `~/.pi/agent/memory/projects/<name>/memories/_index.md` — 已有记忆索引
-
----
-
-## 任务 A：写 essence.md
-
-路径：`(cwd)/essence.md`（即你的当前工作目录下）
-
-覆盖原文件，写分析提炼，让主LLM拥有充分信息进行接下来的对话。：
-
-1. **用户意图** — 本轮核心目标
-2. **关键发现** — 文件结构 / bug / 配置，附路径和行号
-3. **重要代码** — 主 LLM 深入讨论的代码逻辑（**主动去读源文件**判断是否有用；判断是否对接下来得对话有用，如果有用，就把那段逻辑完整提取到 essence 中。）
-4. **修改了什么** — 编辑过的文件 + diff 摘要 + 为什么改
-5. **验证结果** — 编译/测试输出的结论
-6. **失败路径** — 试过但放弃的方案（避免主 LLM 重复尝试）
-7. **遗留问题** — 解决了什么、留下了什么
-
-**与 notebook 去重**：essence 是"上轮发生了什么"的动态记录，notebook 是"当前任务状态"的持久记录。notebook 已写的任务/待办/约束不要重复进 essence——essence 只写 notebook 之外的新信息。
-
-格式：Markdown，代码块保留语言标识。长度不限。
 
 ---
 
@@ -104,7 +85,7 @@ defaultContext: fresh
 问自己四个问题（任一为是 → 写 memory）：
 1. 这条信息是不是可复用的知识（不依赖本轮上下文）？
 2. 未来另一个会话遇到类似问题时，不知道这个信息会不会走弯路？
-3. 这个信息如果只存在 essence（下轮被覆盖），以后会不会后悔？
+3. 这个信息如果只存在于短期记忆（dialogue-summary 滚动窗口，5 轮后淡出），以后会不会后悔？
 4. 这个信息是否有助于建立用户画像？
 
 **最高优先级（必须 remember，无条件）**：
