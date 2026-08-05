@@ -351,6 +351,9 @@ export function registerHooks(pi: ExtensionAPI): void {
   // ============================================================
   pi.on("session_start", async (_event: any, ctx: any) => {
     _agentAborted = false;
+    // Guard: subagents (extractor/cleaner) are spawned with PI_SUBAGENT=1 and
+    // must not create session dirs or touch UI — they only write long-term memory.
+    if (process.env.PI_SUBAGENT === "1") return;
     // 会话隔离 + 会话稳定:目录名 = <ts>-<rand>-<session-file 锚点>。
     // 同一 session file 始终复用同一目录(reload/resume 重触发时不新开、轮次不重置)。
     if (ctx?.cwd) {
