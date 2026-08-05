@@ -384,10 +384,7 @@ export function registerHooks(pi: ExtensionAPI): void {
     const summarySection = summaryContent
       ? `\n\n---\n\n## 最近对话摘要\n\n${summaryContent.trim()}\n`
       : "";
-    const essenceContent = safeRead(path.join(turnsDir, "essence.md"));
-    const essenceSection = essenceContent
-      ? `\n\n---\n\n## 子代理分析\n\n${essenceContent.trim()}\n`
-      : "";
+    // essence.md 已废弃(信息都在对话摘要里)——不再注入
 
     // 5. Build linked memories from notebook [[Wiki-links]]
     let linkedSection = "";
@@ -422,7 +419,7 @@ export function registerHooks(pi: ExtensionAPI): void {
     //    consolidation points (every 5 turns); related/maintenance vary per turn.
     let memoryContext = `${coreSection}\n`;
     if (rules) memoryContext += `\n${rules}\n`;
-    memoryContext += `\n---\n\n${memoryIndexSection}${summarySection}${essenceSection}${notebookSection}${linkedSection}${searchResultsSection}${maintenanceSection()}\n`;
+    memoryContext += `\n---\n\n${memoryIndexSection}${summarySection}${notebookSection}${linkedSection}${searchResultsSection}${maintenanceSection()}\n`;
 
     return {
       systemPrompt: event.systemPrompt + `\n\n${memoryContext}`,

@@ -30,10 +30,11 @@ defaultContext: fresh
 
 1. 读 `(cwd)/dialogue-summary.md`（工作记忆）和 `(cwd)/raw-<n>.md`（本轮完整对话）
 2. 按以下标准提炼（与每 5 轮固化子代理同标准）：
-   - **essence.md**（覆盖写，在 cwd 下）：用户意图、关键发现、重要代码逻辑、修改了什么、验证结果、失败路径、遗留问题；与 notebook 已有内容去重
    - **notebook.md**（edit 校对——主 LLM 已每轮维护）：清理过时、补充遗漏，不重复写入已有内容
    - **长期记忆**（`remember`）：跨会话知识、用户明确要求记住的信息、用户偏好、纠正性反馈（**最高优先级，无条件必须 remember**）
-3. **工作记忆保留**：dialogue-summary.md 每轮 append 永久保留（不归档不覆盖），无需清理；essence.md 覆盖为最近固化点分析
+
+> essence.md 已废弃：对话信息都在 dialogue-summary.md（主 LLM 每轮注入最后 5 轮），无需二次提炼。
+3. **工作记忆保留**：dialogue-summary.md 每轮 append 永久保留（不归档不覆盖），无需清理
 
 > 若 `dialogue-summary.md` 为空或不存在 → 跳过任务 0，直接进入清理。
 
@@ -60,7 +61,7 @@ defaultContext: fresh
 ---
 
 ## 约束
-- **任务 0 允许接触**：`turns/dialogue-summary.md`、`turns/raw.md`、`turns/essence.md`、`notebook.md`、`memories/*`、`personal/*`
+- **任务 0 允许接触**：`dialogue-summary.md`、`raw-*.md`、`notebook.md`、`memories/*`、`personal/*`mories/*`、`personal/*`
 - **除此之外**：不修改 `turns/` 下的任何其他文件（`raw/` 目录、`summaries/` 归档、`round-count.txt` 等），不碰任何非记忆、非上述项目文件
 - **supersede 优先**（保留修正链），`forget` 仅用于：0 字节文件、明显无意义的占位（如 `未命名.base`）
 - 清理前先 `recall` 确认没有遗漏关联
@@ -69,7 +70,7 @@ defaultContext: fresh
 ## 输出格式
 ```
 ## 记忆维护报告
-- 🧠 固化: N 轮 → essence/notebook/remember（归档到 summaries/）
+- 🧠 固化: N 轮 → notebook 校对 + remember 长期记忆
 - ✅ 修复: N 处格式污染（双标题等）
 - 🔄 合并: N 组重复条目
 - 🔁 supersede: N 条过期/矛盾
