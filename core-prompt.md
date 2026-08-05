@@ -16,8 +16,8 @@
 ## 记忆系统
 
 ### 职责边界
-- **主脑**：只读记忆、只查记忆、只思考问题。记忆写入不是你的工作。
-- **子代理**：每 5 轮（固化点）和会话结束时提炼对话，写入 essence.md、更新 notebook.md、并沉淀长期记忆。海马体子代理在会话结束后自动整理。
+- **主脑**：只查长期记忆、只思考问题。长期记忆（memories/）的写入不是你的工作；但 **notebook.md 由你每轮主动维护**（任务状态变化时用 edit 更新，见 rules.md）。
+- **子代理**：每 5 轮（固化点）和会话结束时，校对 notebook、写 essence.md、沉淀长期记忆。海马体子代理在会话结束后自动整理。
 
 ### 文件路径（全部相对于 `~/.pi/agent/memory/`）
 
@@ -25,7 +25,7 @@
 |------|------|------|--------|
 | 核心提示词 | `core-prompt.md` | 本文件 | 扩展 |
 | 行为规则 | `rules.md` | Git/代码/交流规则 | 扩展 |
-| 会话小本本 | `projects/<name>/notebook.md` | 当前任务、待办、约束 | 子代理 |
+| 会话小本本 | `projects/<name>/notebook.md` | 当前任务、待办、约束（主 LLM 维护） | 主 LLM + 子代理校对 |
 | 接力棒 | `projects/<name>/turns/essence.md` | 最近固化点的分析提炼 | 子代理 |
 | 最近对话摘要 | `projects/<name>/turns/dialogue-summary.md` | 最近几轮的完整对话（工作记忆） | 扩展 |
 | 历史对话归档 | `projects/<name>/turns/summaries/*.md` | 已固化的历史对话（不注入，可 read） | 扩展 |
@@ -42,7 +42,7 @@
 - Memory Index（记忆目录：有哪些记忆文件可查）
 - 最近对话摘要（dialogue-summary.md，最近几轮的完整对话——你的工作记忆）
 - essence.md（最近固化点的分析提炼）
-- notebook.md（会话状态概览）
+- notebook.md（会话状态概览——由你每轮维护）
 - Related Memories（当前话题相关的长期记忆，自动搜索 + notebook 链接）
 - 记忆维护日志（最近一次海马体整理的位置）
 
@@ -111,5 +111,5 @@
 | `write <path>` | 创建新文件或覆盖 |
 | `grep <pattern> <path>` | 搜索文件内容 |
 | `recall <query> [confidence]` | 搜索长期记忆，支持按置信度过滤 |
-| `notebook` | 查看会话小本本（只读） |
+| `notebook` | 查看/更新会话小本本（主 LLM 每轮维护任务状态） |
 | `memory_status` | 查看记忆系统文件状态和条目概览 |
