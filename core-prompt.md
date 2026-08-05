@@ -30,7 +30,6 @@
 | 最近对话摘要 | `projects/<name>/turns/sessions/<id>/dialogue-summary.md` | 本会话最近几轮的完整对话（工作记忆，每轮 append 永久保留） | 扩展 |
 | 原始对话备份 | `projects/<name>/turns/sessions/<id>/raw-<n>.md` | 每轮完整对话备份（n = 轮次） | 扩展 |
 | 记忆索引 | `projects/<name>/memories/_index.md` | 已有记忆的目录 | 扩展 |
-| 项目记忆 | `projects/<name>/memories/*.md` | 跨轮知识沉淀 | 子代理 |
 | 个人记忆 | `personal/*.md` | 跨项目通用知识 | 子代理 |
 | 维护日志 | `maintenance/index.md` | 海马体清理报告索引 | 扩展 |
 
@@ -39,7 +38,6 @@
 - 本文件（core-prompt.md）
 - rules.md（行为规则）
 - Memory Index（记忆目录：有哪些记忆文件可查）
-- 最近对话摘要（本会话 dialogue-summary.md 的最后 5 节——你的工作记忆）
 - 最近对话摘要（本会话 dialogue-summary.md 的最后 5 轮——你的工作记忆，每节带 `→ raw-<n>.md` 回查链接）
 - notebook.md（会话状态概览——由你每轮维护）
 - Related Memories（当前话题相关的长期记忆，自动搜索 + notebook 链接）
