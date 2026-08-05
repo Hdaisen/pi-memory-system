@@ -364,8 +364,11 @@ export function registerHooks(pi: ExtensionAPI): void {
     // turn-summary.md for compatibility.
     const dialogueSummary = safeRead(path.join(turnsDir, "dialogue-summary.md"));
     const summaryContent = dialogueSummary || safeRead(path.join(turnsDir, "turn-summary.md"));
+    const archiveHint = dialogueSummary
+      ? "\n> 历史对话归档: `turns/summaries/` 下(不注入,可 `read` 查阅)\n"
+      : "";
     const summarySection = summaryContent
-      ? `\n\n---\n\n## 最近对话摘要\n\n${summaryContent.trim()}\n`
+      ? `\n\n---\n\n## 最近对话摘要\n\n${summaryContent.trim()}\n${archiveHint}`
       : "";
     const essenceContent = safeRead(path.join(turnsDir, "essence.md"));
     const essenceSection = essenceContent
