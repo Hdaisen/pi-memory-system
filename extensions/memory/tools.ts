@@ -98,8 +98,18 @@ export function registerTools(pi: ExtensionAPI): void {
         } else if (normalizedFile.startsWith(`${category}/`)) {
           normalizedFile = normalizedFile.slice(`${category}/`.length);
         }
+        // Security: only allow a plain file name — strip path separators and
+        // traversal sequences so remember can never write outside the memory dir.
+        normalizedFile = normalizedFile
+          .replace(/[/\\]/g, "")
+          .replace(/\.\./g, "")
+          .trim();
         if (normalizedFile === category || normalizedFile === categoryDir) {
           // File param is redundant — write to flat {category}s.md instead
+          fileName = `${category}s.md`;
+          targetFile = path.join(targetDir, fileName);
+        } else if (!normalizedFile) {
+          // File param was only separators/traversal — fall back to flat file
           fileName = `${category}s.md`;
           targetFile = path.join(targetDir, fileName);
         } else {
