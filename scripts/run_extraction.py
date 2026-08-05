@@ -290,6 +290,8 @@ def write_turn_summary(messages: list, turns_dir: Path):
     if not text:
         return
 
+    ensure_dir(turns_dir)
+
     # No timestamp prefix — this file is injected every turn and the
     # timestamp is per-turn noise that breaks DeepSeek prefix caching
     # without carrying information.
@@ -297,6 +299,61 @@ def write_turn_summary(messages: list, turns_dir: Path):
     out_path = turns_dir / "turn-summary.md"
     out_path.write_text(block, encoding="utf-8")
     print(f"[extract] ✓ turn-summary.md: {len(text)} chars", file=sys.stderr)
+
+
+# ============================================================
+# 对话摘要累积(工作记忆) + 固化轮次控制
+# ============================================================
+
+ROUND_COUNT_FILE = "round-count.txt"
+CONSOLIDATE_EVERY = 5  # 每 5 轮跑一次完整子代理(essence+notebook+remember)
+
+
+def append_dialogue_summary(messages: list, turns_dir: Path):
+    """追加本轮摘要一节到 dialogue-summary.md(工作记忆累积文件)。
+
+    固化点(每 CONSOLIDATE_EVERY 轮)时由 reset_dialogue_summary 重置,
+    因此该文件恒 ≤ CONSOLIDATE_EVERY 节。追加式 → 前缀稳定(缓存友好)。
+    """
+    asst_msg = next(
+        (m for m in reversed(messages) if m.get("role") == "assistant"), None
+    )
+    if not asst_msg:
+        return
+    asst_text = extract_text(asst_msg.get("content", "")).strip()
+    if not asst_text:
+        return
+
+    user_msg = next((m for m in reversed(messages) if m.get("role") == "user"), None)
+    user_text = ""
+    if user_msg:
+        user_text = extract_text(user_msg.get("content", "")).strip().replace("\n", " ")[:150]
+
+    ensure_dir(turns_dir)
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    block = f"### 轮次 {ts}\n**用户**: {user_text or '(空)'}\n**助手**: {asst_text}\n"
+    out = turns_dir / "dialogue-summary.md"
+    with open(out, "a", encoding="utf-8") as f:
+        f.write(block + "\n")
+    print(f"[extract] ✓ dialogue-summary.md: +1 turn ({len(asst_text)} chars)", file=sys.stderr)
+
+
+def read_round_count(turns_dir: Path) -> int:
+    try:
+        return int((turns_dir / ROUND_COUNT_FILE).read_text(encoding="utf-8").strip())
+    except Exception:
+        return 0
+
+
+def reset_dialogue_summary(turns_dir: Path):
+    """固化后重置摘要:保留最近一节作为过渡,避免缓存链完全断裂。"""
+    f = turns_dir / "dialogue-summary.md"
+    if f.exists():
+        sections = f.read_text(encoding="utf-8").split("\n### ")
+        if len(sections) > 1:
+            f.write_text("### " + sections[-1].rstrip() + "\n", encoding="utf-8")
+        else:
+            f.unlink(missing_ok=True)
 
 
 # ============================================================
@@ -449,14 +506,26 @@ def main():
     turns_dir = PROJECTS_DIR / proj_name / "turns"
 
     try:
-        # 1+2. 并行写 raw.md 和 turn-summary.md（无依赖，写不同文件）
+        # 1+2. 并行写 raw.md、turn-summary.md、追加对话摘要(工作记忆)
         from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        with ThreadPoolExecutor(max_workers=3) as pool:
             pool.submit(write_raw_md, messages, turns_dir)
             pool.submit(write_turn_summary, messages, turns_dir)
+            pool.submit(append_dialogue_summary, messages, turns_dir)
 
-        # 3. 启动子代理（依赖 raw.md 已存在）
-        spawn_subagent(turns_dir)
+        # 3. 固化判定:每 CONSOLIDATE_EVERY 轮跑一次完整子代理
+        #    (essence + notebook + remember)。中间轮只写文件,不启动子代理,
+        #    依赖注入的累积摘要(工作记忆)保持对话连续性。
+        cnt = read_round_count(turns_dir) + 1
+        (turns_dir / ROUND_COUNT_FILE).write_text(str(cnt), encoding="utf-8")
+
+        if cnt % CONSOLIDATE_EVERY == 0:
+            spawn_subagent(turns_dir)
+            reset_dialogue_summary(turns_dir)
+            (turns_dir / ROUND_COUNT_FILE).write_text("0", encoding="utf-8")
+            print(f"[extract] ✓ consolidation complete (round {cnt})", file=sys.stderr)
+        else:
+            print(f"[extract] · 非固化轮 ({cnt}/{CONSOLIDATE_EVERY}),跳过子代理", file=sys.stderr)
 
         print("[extract] ✓ extraction complete", file=sys.stderr)
     except Exception as e:

@@ -34,6 +34,7 @@ defaultContext: fresh
 | 长期记忆 | `~/.pi/agent/memory/projects/<name>/memories/*.md` | 跨会话知识沉淀 | 持久 |
 
 ## 输入
+- `~/.pi/agent/memory/projects/<name>/turns/dialogue-summary.md` — **最近 N 轮对话摘要**(工作记忆累积,优先阅读;你每 5 轮才运行一次,靠它掌握间隔轮次的内容)
 - `~/.pi/agent/memory/projects/<name>/turns/raw.md` — 本轮完整对话（>5KB 工具输出已截断 + 存 hash）
 - `~/.pi/agent/memory/projects/<name>/notebook.md` — 当前会话小本本
 - `~/.pi/agent/memory/projects/<name>/memories/_index.md` — 已有记忆索引
@@ -101,6 +102,15 @@ defaultContext: fresh
 2. 未来另一个会话遇到类似问题时，不知道这个信息会不会走弯路？
 3. 这个信息如果只存在 essence（下轮被覆盖），以后会不会后悔？
 4. 这个信息是否有助于建立用户画像？
+
+**最高优先级（必须 remember，无条件）**：
+- 用户**明确要求**你记住的信息（"记住..."/"以后..."/"别忘了..."）
+- 用户表达的**偏好**（喜欢的风格、工具、约定、禁忌）
+- 用户对过往认知的**纠正**（这是 supersede 信号，同时 remember 新认知）
+
+> 注意：你每 5 轮才运行一次，间隔轮次的内容只能靠 dialogue-summary.md 掌握。
+> 如果间隔轮次里出现了上述"必须 remember"的信息，即使摘要中只是简短提及，
+> 也要基于摘要内容尽力沉淀到长期记忆——不要因为信息来自摘要而非原文就放弃。
 
 ### 优先沉淀
 - 代码分析结论、文档结构的关键发现（fact）
