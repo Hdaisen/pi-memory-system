@@ -65,26 +65,53 @@ export function registerCommands(pi: ExtensionAPI): void {
         "修复格式污染、合并重复条目、supersede 过期/矛盾条目、报告死链与空文件。" +
         "不碰 notebook.md（主 LLM 独家维护），不碰 turns/ 短期记忆。最后输出清理报告。";
 
-      console.log("🧹 Running memory cleaner subagent...");
-      return new Promise<void>((resolve) => {
-        const child = spawn(cmd, {
-          shell: true,
-          cwd,
-          env: { ...process.env, PI_SUBAGENT: "1" },
-          stdio: ["pipe", "inherit", "inherit"],
-        });
-        child.stdin?.write(prompt);
-        child.stdin?.end();
-        child.on("exit", (code) => {
-          console.log(code === 0
-            ? "✅ Memory cleaner finished"
-            : `⚠️ Memory cleaner exited with code ${code}`);
-          resolve();
-        });
-        child.on("error", (err) => {
-          console.error("❌ Failed to spawn memory cleaner: " + err.message);
-          resolve();
-        });
+      // 后台运行：输出重定向到 maintenance 日志，不阻塞终端，状态栏显示进度
+      const maintenanceDir = path.join(HOME, ".pi", "agent", "memory", "maintenance");
+      fs.mkdirSync(maintenanceDir, { recursive: true });
+      const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      const logPath = path.join(maintenanceDir, `clean-${ts}.log`);
+      const logFd = fs.openSync(logPath, "a");
+      fs.writeSync(logFd, `# Memory cleaner — ${new Date().toISOString()}\n\ncwd: ${cwd}\nmodel: ${model}\n\n`);
+
+      const theme = ctx.ui.theme;
+      const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+      let i = 0;
+      ctx.ui.setStatus("memory-clean", theme.fg("accent", frames[0]) + theme.fg("dim", " memory-clean 运行中…"));
+      const timer = setInterval(() => {
+        i = (i + 1) % frames.length;
+        ctx.ui.setStatus("memory-clean", theme.fg("accent", frames[i]) + theme.fg("dim", " memory-clean 运行中…"));
+      }, 120);
+
+      console.log(`🧹 Memory cleaner running in background — log: ${logPath}`);
+
+      const child = spawn(cmd, {
+        shell: true,
+        cwd,
+        env: { ...process.env, PI_SUBAGENT: "1" },
+        stdio: ["pipe", logFd, logFd],
+        detached: true,
+      });
+      child.stdin?.write(prompt);
+      child.stdin?.end();
+      child.unref();
+
+      let done = false;
+      const finish = (msg: string, type: "info" | "warning" | "error") => {
+        if (done) return;
+        done = true;
+        clearInterval(timer);
+        ctx.ui.setStatus("memory-clean", undefined);
+        try { fs.closeSync(logFd); } catch { /* already closed */ }
+        ctx.ui.notify(msg, type);
+      };
+      child.on("exit", (code) => {
+        finish(code === 0
+          ? `✅ Memory cleaner finished — log: ${logPath}`
+          : `⚠️ Memory cleaner exited with code ${code} — log: ${logPath}`,
+          code === 0 ? "info" : "warning");
+      });
+      child.on("error", (err) => {
+        finish("❌ Failed to spawn memory cleaner: " + err.message, "error");
       });
     },
   });
