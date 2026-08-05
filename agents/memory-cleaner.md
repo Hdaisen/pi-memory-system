@@ -18,6 +18,17 @@ defaultContext: fresh
 - 全局记忆：`~/.pi/agent/memory/personal/`
 - 记忆索引：`<scope>/_index.md`（对比文件与索引的一致性）
 
+## 任务 0：固化未提炼的轮次（会话结束时的睡眠固化）
+
+会话可能在任何轮次结束（不一定是第 5 轮固化点），此时 `dialogue-summary.md` 里还有未提炼的轮次：
+
+1. 读 `~/.pi/agent/memory/projects/<name>/turns/dialogue-summary.md`（工作记忆累积摘要）
+2. 读 `~/.pi/agent/memory/projects/<name>/turns/raw.md`（本轮完整对话）
+3. 把摘要中的关键内容按"任务 A/B/C"的标准提炼：写 essence.md（任务进展）、更新 notebook.md、`remember` 长期记忆（用户明确要求/偏好/纠正 → 必须记）
+4. **提炼后清空 `dialogue-summary.md`**（保留最近 1 节作为过渡）
+
+> 固化与清理二选一时：**固化优先**——记忆准确性比去重重要。
+
 ## 任务：扫描并清理（按优先级）
 
 ### 1. 修复格式污染
