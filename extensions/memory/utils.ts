@@ -23,32 +23,71 @@ export function extractLinks(text: string): string[] {
   return links;
 }
 
+/** Common stopwords shared by keyword extraction paths. */
+const STOPWORDS = new Set([
+  "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+  "have", "has", "had", "do", "does", "did", "will", "would", "could",
+  "should", "may", "might", "can", "shall", "to", "of", "in", "for",
+  "on", "with", "at", "by", "from", "as", "into", "through", "during",
+  "before", "after", "above", "below", "between", "out", "off", "over",
+  "under", "again", "further", "then", "once", "here", "there", "when",
+  "where", "why", "how", "all", "both", "each", "few", "more", "most",
+  "other", "some", "such", "no", "nor", "not", "only", "own", "same",
+  "so", "than", "too", "very", "just", "because", "but", "and", "or",
+  "if", "while", "about", "up", "it", "its", "my", "me", "i", "we",
+  "our", "you", "your", "he", "she", "they", "them", "this", "that",
+  "these", "those", "what", "which", "who", "whom", "help", "please",
+  "want", "need", "like", "know", "think", "make", "get", "go", "come",
+  "帮我", "请", "一下", "怎么", "什么", "是", "的", "了", "在", "我",
+]);
+
+/**
+ * Extract search keywords from text for matching.
+ * - English words / identifiers (length >= 2, not stopwords)
+ * - CJK 2-grams from contiguous Chinese runs (Chinese has no spaces, so
+ *   2-grams are the smallest unit that survives phrasing variations)
+ * Capped at 32 keywords to bound matching cost.
+ */
+export function extractKeywords(text: string): string[] {
+  const lower = text.toLowerCase();
+  const words = new Set<string>();
+
+  for (const m of lower.matchAll(/[a-z][a-z0-9_]{1,}/g)) {
+    const w = m[0];
+    if (w.length >= 2 && !/^\d+$/.test(w) && !STOPWORDS.has(w)) words.add(w);
+  }
+
+  for (const run of lower.matchAll(/[\u4e00-\u9fff]{2,}/g)) {
+    const s = run[0];
+    for (let i = 0; i < s.length - 1; i++) {
+      const gram = s.slice(i, i + 2);
+      if (gram.trim() && !STOPWORDS.has(gram)) words.add(gram);
+    }
+  }
+
+  return Array.from(words).slice(0, 32);
+}
+
 /** Resolve a [[Wiki-link]] to an actual file path. */
 export function resolveLink(link: string, cwd: string): string | null {
-  // Check project memories first
-  const projectMem = path.join(
-    PATHS.memoriesDir(cwd),
-    link.endsWith(".md") ? link : `${link}.md`,
-  );
-  if (fs.existsSync(projectMem)) return projectMem;
+  // Normalize: strip known prefixes so both `decisions/design.md` and
+  // `memories/decisions/design.md` resolve to the same file.
+  let l = link.trim();
+  if (l.startsWith("memories/")) l = l.slice("memories/".length);
+  if (l.startsWith("personal/")) l = l.slice("personal/".length);
+  const base = l.endsWith(".md") ? l : `${l}.md`;
 
-  // Check project root (for notebook.md etc.)
-  const projectRoot = path.join(
-    PATHS.projectDir(cwd),
-    link.endsWith(".md") ? link : `${link}.md`,
-  );
-  if (fs.existsSync(projectRoot)) return projectRoot;
-
-  // Check personal (global)
-  const personal = path.join(
-    PATHS.personalDir,
-    link.endsWith(".md") ? link : `${link}.md`,
-  );
-  if (fs.existsSync(personal)) return personal;
+  const candidates = [
+    path.join(PATHS.memoriesDir(cwd), base),
+    path.join(PATHS.projectDir(cwd), base),
+    path.join(PATHS.personalDir, base),
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
 
   // Legacy fallback: check old .pi/memory/ location
-  const oldProjectDir = path.join(cwd, ".pi", "memory");
-  const legacyMem = path.join(oldProjectDir, link.endsWith(".md") ? link : `${link}.md`);
+  const legacyMem = path.join(cwd, ".pi", "memory", base);
   if (fs.existsSync(legacyMem)) return legacyMem;
 
   return null;
@@ -72,32 +111,51 @@ export function walkMarkdownFiles(dir: string): string[] {
 }
 
 /**
- * Read memory index (_index.md) for both project and global scopes.
- * Returns a summary of available memories.
+ * Build a compact memory directory (scope → category → file names) for
+ * project and global memories. Injected into the system prompt so the
+ * main LLM knows what memories exist without paying the full _index.md
+ * size (which can be tens of KB for memory-heavy projects).
  */
-export function readMemoryIndex(cwd: string): string {
-  const sections: string[] = [];
+export function readMemoryIndex(cwd: string, maxChars = 2000): string {
+  const scopes: [string, string][] = [
+    ["项目记忆", PATHS.memoriesDir(cwd)],
+    ["全局记忆", PATHS.personalDir],
+  ];
+  const parts: string[] = [];
 
-  // Project memories index
-  const projectIndex = path.join(PATHS.memoriesDir(cwd), "_index.md");
-  const projectContent = safeRead(projectIndex);
-  if (projectContent) {
-    sections.push("### Project Memories\n" + projectContent.trim());
+  for (const [label, dir] of scopes) {
+    if (!fs.existsSync(dir)) continue;
+    const files = walkMarkdownFiles(dir);
+    if (files.length === 0) continue;
+
+    const byDir = new Map<string, string[]>();
+    for (const f of files) {
+      const rel = path.relative(dir, f).replace(/\\/g, "/");
+      const d = path.dirname(rel);
+      if (!byDir.has(d)) byDir.set(d, []);
+      byDir.get(d)!.push(path.basename(f).replace(/\.md$/, ""));
+    }
+
+    const lines = [`### ${label}`];
+    for (const [d, names] of [...byDir.entries()].sort()) {
+      const dirLabel = d === "." ? "(顶层)" : `${d}/`;
+      const shown = names.slice(0, 12).join(", ");
+      const more = names.length > 12 ? ` 等 ${names.length} 个文件` : "";
+      lines.push(`- ${dirLabel} ${shown}${more}`);
+    }
+    parts.push(lines.join("\n"));
   }
 
-  // Global memories index
-  const globalIndex = path.join(PATHS.personalDir, "_index.md");
-  const globalContent = safeRead(globalIndex);
-  if (globalContent) {
-    sections.push("### Global Memories\n" + globalContent.trim());
+  let out = parts.join("\n\n");
+  if (out.length > maxChars) {
+    out = out.slice(0, maxChars) + "\n…(记忆目录已截断,可对具体主题用 recall 查询)";
   }
-
-  return sections.join("\n\n");
+  return out;
 }
 
 /**
- * Simple keyword-based semantic search across memory files.
- * Extracts keywords from user input and finds matching paragraphs.
+ * Keyword-based search across project + global memory files.
+ * Scores each ## section by keyword hits and returns the top results.
  */
 export function searchMemories(
   userPrompt: string,
@@ -106,37 +164,9 @@ export function searchMemories(
 ): string[] {
   if (!userPrompt || userPrompt.trim().length < 10) return [];
 
-  // Extract keywords (remove common words, keep significant ones)
-  const stopWords = new Set([
-    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "can", "shall", "to", "of", "in", "for",
-    "on", "with", "at", "by", "from", "as", "into", "through", "during",
-    "before", "after", "above", "below", "between", "out", "off", "over",
-    "under", "again", "further", "then", "once", "here", "there", "when",
-    "where", "why", "how", "all", "both", "each", "few", "more", "most",
-    "other", "some", "such", "no", "nor", "not", "only", "own", "same",
-    "so", "than", "too", "very", "just", "because", "but", "and", "or",
-    "if", "while", "about", "up", "it", "its", "my", "me", "i", "we",
-    "our", "you", "your", "he", "she", "they", "them", "this", "that",
-    "these", "those", "what", "which", "who", "whom", "help", "please",
-    "want", "need", "like", "know", "think", "make", "get", "go", "come",
-    "帮我", "请", "一下", "怎么", "什么", "是", "的", "了", "在", "我",
-  ]);
-
-  const words = userPrompt
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fff\s]/g, " ")
-    .split(/\s+/)
-    .filter(w => w.length > 1 && !stopWords.has(w));
-
-  // Also extract Chinese phrases (2-4 chars)
-  const chineseChars = userPrompt.match(/[\u4e00-\u9fff]{2,4}/g) || [];
-  const keywords = [...new Set([...words, ...chineseChars])];
-
+  const keywords = extractKeywords(userPrompt);
   if (keywords.length === 0) return [];
 
-  // Search across all memory files
   const results: { file: string; content: string; score: number }[] = [];
 
   const searchDir = (dir: string, scope: string) => {
@@ -153,9 +183,7 @@ export function searchMemories(
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
 
-        // Track current section
         if (line.startsWith("## ")) {
-          // Process previous section
           if (currentSection && score > 0) {
             const preview = sectionLines.slice(0, 5).join("\n").trim();
             if (preview) {
@@ -173,17 +201,12 @@ export function searchMemories(
         }
 
         sectionLines.push(line);
-
-        // Score based on keyword matches
         const lower = line.toLowerCase();
         for (const kw of keywords) {
-          if (lower.includes(kw)) {
-            score++;
-          }
+          if (lower.includes(kw)) score++;
         }
       }
 
-      // Process last section
       if (currentSection && score > 0) {
         const preview = sectionLines.slice(0, 5).join("\n").trim();
         if (preview) {
@@ -197,13 +220,9 @@ export function searchMemories(
     }
   };
 
-  // Search project memories
   searchDir(PATHS.memoriesDir(cwd), "project");
-
-  // Search global memories
   searchDir(PATHS.personalDir, "global");
 
-  // Sort by score and return top results
   results.sort((a, b) => b.score - a.score);
 
   return results
@@ -218,6 +237,10 @@ export function readLinkedContent(
   keywords: string[] = [],
 ): string[] {
   const results: string[] = [];
+  // Expand the (usually full-prompt) keyword list into matchable terms:
+  // English words + CJK 2-grams. A full user prompt as a single substring
+  // would never match a memory line — this fixes that.
+  const kw = keywords.flatMap(extractKeywords);
 
   for (const link of links) {
     const resolved = resolveLink(link, cwd);
@@ -245,9 +268,9 @@ export function readLinkedContent(
       }
       if (inHeader) continue;
 
-      if (keywords.length > 0) {
+      if (kw.length > 0) {
         const lower = line.toLowerCase();
-        if (keywords.some((k) => lower.includes(k.toLowerCase()))) {
+        if (kw.some((k) => lower.includes(k))) {
           const start = Math.max(0, i - 2);
           const end = Math.min(lines.length, i + 3);
           matchedLines.push(`... (lines ${start + 1}-${end})`);

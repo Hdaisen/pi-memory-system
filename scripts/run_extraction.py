@@ -290,8 +290,10 @@ def write_turn_summary(messages: list, turns_dir: Path):
     if not text:
         return
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    block = f"# 主脑上一轮回复 ({timestamp})\n\n{text}\n"
+    # No timestamp prefix — this file is injected every turn and the
+    # timestamp is per-turn noise that breaks DeepSeek prefix caching
+    # without carrying information.
+    block = f"# 主脑上一轮回复\n\n{text}\n"
     out_path = turns_dir / "turn-summary.md"
     out_path.write_text(block, encoding="utf-8")
     print(f"[extract] ✓ turn-summary.md: {len(text)} chars", file=sys.stderr)
