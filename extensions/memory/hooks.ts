@@ -393,7 +393,9 @@ export function registerHooks(pi: ExtensionAPI): void {
       memoryIndexSection = "\n\n---\n\n## Memory Index\n" + indexContent;
     }
 
-    if (event.prompt && event.prompt.trim().length > 10) {
+    // Note: searchMemories has its own keyword-based guard (English words +
+    // CJK 2-grams), so Chinese prompts shorter than 10 chars still search.
+    if (event.prompt) {
       const searchResults = searchMemories(event.prompt, cwd, 5);
       if (searchResults.length > 0) {
         searchResultsSection = "\n\n---\n\n## Related Memories (Auto-Injected)\n" + searchResults.join("\n\n");

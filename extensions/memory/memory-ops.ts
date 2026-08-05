@@ -281,7 +281,7 @@ export function runMemoryMaintenance(cwd: string): void {
       .trim();
   } catch { /* default model */ }
 
-  let cmd = `pi -p --no-session --tools read,write,edit,remember,recall,forget,supersede`;
+  let cmd = `pi -p --no-session --tools read,write,edit,remember,recall,notebook,forget,supersede`;
   if (model && model !== "(default)") cmd += ` --model "${model}"`;
   cmd += ` --append-system-prompt "${cleanerPrompt}"`;
 

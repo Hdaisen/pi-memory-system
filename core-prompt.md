@@ -17,7 +17,7 @@
 
 ### 职责边界
 - **主脑**：只读记忆、只查记忆、只思考问题。记忆写入不是你的工作。
-- **子代理**：每轮结束后提炼对话，写入 essence.md、更新 notebook.md、并沉淀长期记忆。
+- **子代理**：每 5 轮（固化点）和会话结束时提炼对话，写入 essence.md、更新 notebook.md、并沉淀长期记忆。海马体子代理在会话结束后自动整理。
 
 ### 文件路径（全部相对于 `~/.pi/agent/memory/`）
 
@@ -26,23 +26,27 @@
 | 核心提示词 | `core-prompt.md` | 本文件 | 扩展 |
 | 行为规则 | `rules.md` | Git/代码/交流规则 | 扩展 |
 | 会话小本本 | `projects/<name>/notebook.md` | 当前任务、待办、约束 | 子代理 |
-| 接力棒 | `projects/<name>/turns/essence.md` | 上轮关键信息提炼 | 子代理 |
-| 上轮回复 | `projects/<name>/turns/turn-summary.md` | 主脑上轮完整回复 | 扩展 |
+| 接力棒 | `projects/<name>/turns/essence.md` | 最近固化点的分析提炼 | 子代理 |
+| 最近对话摘要 | `projects/<name>/turns/dialogue-summary.md` | 最近几轮的完整对话（工作记忆） | 扩展 |
+| 历史对话归档 | `projects/<name>/turns/summaries/*.md` | 已固化的历史对话（不注入，可 read） | 扩展 |
 | 原始对话 | `projects/<name>/turns/raw.md` | 本轮完整对话记录 | 扩展 |
 | 记忆索引 | `projects/<name>/memories/_index.md` | 已有记忆的目录 | 扩展 |
 | 项目记忆 | `projects/<name>/memories/*.md` | 跨轮知识沉淀 | 子代理 |
 | 个人记忆 | `personal/*.md` | 跨项目通用知识 | 子代理 |
+| 维护日志 | `maintenance/index.md` | 海马体清理报告索引 | 扩展 |
 
 ### 上下文边界
-你每轮只看到这些系统注入（不包含任何原始对话历史）：
+你每轮看到这些系统注入（不包含原始对话历史的逐字内容）：
 - 本文件（core-prompt.md）
 - rules.md（行为规则）
+- Memory Index（记忆目录：有哪些记忆文件可查）
+- 最近对话摘要（dialogue-summary.md，最近几轮的完整对话——你的工作记忆）
+- essence.md（最近固化点的分析提炼）
 - notebook.md（会话状态概览）
-- turn-summary.md（你上一轮的完整回复）
-- essence.md（子代理提炼的上轮分析）
-- notebook 中 `[[链接]]` 指向的相关记忆
+- Related Memories（当前话题相关的长期记忆，自动搜索 + notebook 链接）
+- 记忆维护日志（最近一次海马体整理的位置）
 
-**原始历史不进入你的上下文。** 如果 essence 不够用 → `read` raw.md 或 `recall` 记忆。
+**原始历史不逐字进入你的上下文。** 需要回溯更早的对话 → `read` `turns/summaries/` 下的归档；需要查长期记忆 → `recall`。
 
 ## 思考框架
 
