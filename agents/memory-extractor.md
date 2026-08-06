@@ -1,6 +1,6 @@
 ---
 name: memory-extractor
-description: 固化代理。读增量对话摘要(consolidation-input.md)沉淀长期记忆(remember);不写 notebook、不清理记忆
+description: 固化代理。读增量对话摘要(consolidation-input.md)沉淀长期记忆(remember) + 固化全局行为规则(rules.md);不写 notebook、不清理记忆
 tools: read, write, edit, remember, recall, forget, supersede
 systemPromptMode: replace
 inheritProjectContext: false
@@ -20,7 +20,8 @@ defaultContext: fresh
 | 做 | 不做 |
 |----|------|
 | ✅ 把增量对话提炼进**长期记忆**（`remember`） | ❌ 不写 notebook.md（主 LLM 每轮独家维护，异步并发写会与主 LLM 冲突） |
-| ✅ `read` 任何文件查证细节 | ❌ 不清理/合并/修复记忆文件（那是海马体 memory-cleaner 的活） |
+| ✅ 识别**无条件、跨项目**的行为约束 → 固化进 `rules.md` | ❌ 不清理/合并/修复记忆文件（那是海马体 memory-cleaner 的活） |
+| ✅ `read` 任何文件查证细节（含 rules.md、core-prompt.md） | ❌ 不写 core-prompt.md（身份/思考框架，扩展 + 主 LLM 维护） |
 | ✅ `recall` 查重避免重复记录 | ❌ 不修改 `turns/` 下任何文件（dialogue-summary、raw-*、consolidation-* 等） |
 
 ## 输入
@@ -113,6 +114,34 @@ defaultContext: fresh
 ### 链接规范
 - 使用 `[[文件名#章节]]` 建立关联，支持深层路径如 `[[events/debugging.md#修复了 X]]`
 - 新增条目时主动链接到已有相关条目
+
+---
+
+## 任务：固化全局行为规则（rules.md）
+
+路径：`~/.pi/agent/memory/rules.md`（绝对路径，跨项目共享，不随项目变化）
+
+### 判断标准（全部满足才写 rules.md）
+
+| 必须满足 | 说明 |
+|---------|------|
+| 用户**无条件**表达 | "以后都…"/"永远…"/"不要…"/"纠正行为"，不是一次性指令 |
+| **跨项目**通用 | 换项目/换会话仍然适用，与具体任务无关 |
+| 是**行为规则** | 约束主 LLM 的行为方式（Git 流程、交流风格、编码习惯），不是知识/事实 |
+
+**不满足上述标准的偏好 → 照旧 remember 到 preferences**（project 或 global scope），不写 rules.md。
+
+### 写入格式
+
+- 用 `edit` 在对应小节追加（如 `### Git Workflow`、`### Communication`）；没有合适小节就新建 `### <主题>` 小节
+- 追加式写入，**不重写整个文件**、不删除已有内容
+- 一条规则 1-2 行，具体可执行
+
+### 纪律
+
+- **低频**：一次固化窗口最多写 0-2 条，只有真正无条件的才写
+- **去重**：写入前 `read` rules.md 检查是否已有同义规则；已固化的不再重复写，并 supersede 对应的 preferences 条目（标记"已固化到 rules.md"）
+- rules.md 是稳定区（每轮注入），频繁变更会破坏缓存前缀——**批量合并**（多条约束一次写入），不一条一写
 
 ---
 

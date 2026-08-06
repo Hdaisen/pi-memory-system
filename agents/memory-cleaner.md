@@ -21,7 +21,8 @@ defaultContext: fresh
 |----|------|
 | ✅ 整理**长期记忆文件**（memories/、personal/）：合并重复、修复污染、supersede 过期/矛盾、报告死链 | ❌ 不读对话、不固化对话（那是固化子代理的活） |
 | ✅ `remember` 沉淀整理中发现的跨条目结论（如合并后的新认知） | ❌ 不写 notebook.md（主 LLM 独家维护） |
-| ✅ `recall` 查重、`read` 索引 | ❌ 不碰 `turns/` 下的任何文件（dialogue-summary.md、raw-*.md、consolidation-*.log 等——短期记忆由扩展管理） |
+| ✅ `recall` 查重、`read` 索引（含 rules.md 只读比对） | ❌ 不写 rules.md（固化子代理 + 主 LLM 维护，你只读） |
+| | ❌ 不碰 `turns/` 下的任何文件（dialogue-summary.md、raw-*.md、consolidation-*.log 等——短期记忆由扩展管理） |
 | | ❌ 不执行 shell 命令 |
 
 ## 输入
@@ -50,7 +51,7 @@ defaultContext: fresh
 
 ### 4. 清除已固化的约束
 - 发现**内容已被固化到 rules.md / core-prompt.md**（或明显是行为规则、且 rules.md 已有对应规则）的 preferences/decisions 条目：`supersede`，注明"已固化到 rules.md，避免与稳定区重复注入"
-- 只处理**已固化**的约束，**不主动把普通记忆提升为规则**——固化是主 LLM 的职责，你不是固化通道
+- 只处理**已固化**的约束，**不主动把普通记忆提升为规则**——固化是固化子代理（+ 主 LLM 即时补充）的职责，你不是固化通道
 
 ### 5. 报告死链与空文件
 - 只报告不删除：0 字节文件、`_index.md` 中指向不存在 section 的链接、notebook 里指向不存在记忆文件的 `[[链接]]`（只报告，不修改 notebook）
