@@ -470,7 +470,10 @@ def spawn_subagent(turns_dir: Path):
 
     flags = 0
     if os.name == "nt":
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        # DETACHED_PROCESS + shell=True + 管道 stdio 会让子进程 stdin 句柄失效,
+        # pi -p 永远等输入 → 固化子代理挂起、日志只有头部无输出(8/5 起全挂)。
+        # CREATE_NO_WINDOW 无控制台窗口但保留句柄继承,子进程正常产出。
+        flags = subprocess.CREATE_NO_WINDOW
     try:
         proc = subprocess.Popen(
             full_cmd,
