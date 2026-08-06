@@ -302,9 +302,9 @@ export function runMemoryMaintenance(cwd: string): void {
       cwd: PATHS.projectDir(cwd),
       env: { ...process.env, PI_SUBAGENT: "1" },
       stdio: ["pipe", logFd, logFd],
-      windowsHide: true,
-      // 不用 detached: true — Windows 下 detached + shell + 管道 stdio 会挂起
-      // (同固化子代理修复)。unref() 保证父进程退出不阻塞子进程。
+      // Windows: detached+shell+管道 stdio 会挂起(修复 #23),用 windowsHide;
+      // Linux/Mac: detached 是标准后台化方式(setsid 脱离终端,父退出后子进程存活)。
+      ...(process.platform === "win32" ? { windowsHide: true } : { detached: true }),
     });
     child.stdin?.write(prompt);
     child.stdin?.end();
@@ -372,10 +372,9 @@ export function spawnConsolidationSubagent(sessionDir: string): void {
       cwd: sessionDir,
       env: { ...process.env, PI_SUBAGENT: "1", PI_SESSION_DIR: sessionDir },
       stdio: ["pipe", logFd, logFd],
-      windowsHide: true,
-      // 不用 detached: true — Windows 下 detached + shell + 管道 stdio 会使
-      // stdin 句柄失效,子进程挂起不产出(8/5 起固化日志只有头部)。
-      // unref() 已保证父进程退出不阻塞子进程;windowsHide 隐藏控制台窗口。
+      // Windows: detached+shell+管道 stdio 会挂起(修复 #23),用 windowsHide;
+      // Linux/Mac: detached 是标准后台化方式(setsid 脱离终端,父退出后子进程存活)。
+      ...(process.platform === "win32" ? { windowsHide: true } : { detached: true }),
     });
     child.stdin?.write(prompt);
     child.stdin?.end();
