@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
-import { HOME, PATHS } from "./config";
+import { HOME, PATHS, getProjectName } from "./config";
 import { safeRead, extractLinks, readLinkedContent, readMemoryIndex, searchMemories, lastSections, countSections } from "./utils";
 import { isBinaryFile, convertWithMarkitdown } from "./markitdown";
 import { ensureProjectDir, refreshIndex, updateTaskWidget, maintenanceSection, spawnConsolidationSubagent, CONSOLIDATE_AT_SESSION_END } from "./memory-ops";
@@ -208,7 +208,7 @@ function runExtractionWithProgress(
       childProc = spawn("python3", [scriptPath], {
         cwd,
         stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, PI_SUBAGENT: "1", PI_SESSION_DIR: _sessionDir ?? "" },
+        env: { ...process.env, PI_SUBAGENT: "1", PI_SESSION_DIR: _sessionDir ?? "", PI_PROJECT_NAME: getProjectName(cwd) },
         signal: ac.signal,
       });
 
@@ -291,7 +291,7 @@ async function runExtractionSimple(
       const child = spawn("python3", [scriptPath], {
         cwd,
         stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, PI_SUBAGENT: "1", PI_SESSION_DIR: _sessionDir ?? "" },
+        env: { ...process.env, PI_SUBAGENT: "1", PI_SESSION_DIR: _sessionDir ?? "", PI_PROJECT_NAME: getProjectName(cwd) },
         signal: ac.signal,
       });
 

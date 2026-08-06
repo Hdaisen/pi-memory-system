@@ -10,6 +10,10 @@ export const HOME = process.env.HOME || process.env.USERPROFILE || "~";
  */
 let _projNameCache: { cwd: string; name: string } | null = null;
 export function getProjectName(cwd: string): string {
+  // 子代理(固化/海马体)的 cwd 是会话目录,向上找不到 .git/.pi-project →
+  // 会 fallback 成 session id 导致记忆写入 projects/<session-id>/ 假目录。
+  // 主进程 spawn 时显式传 PI_PROJECT_NAME 覆盖推导。
+  if (process.env.PI_PROJECT_NAME) return process.env.PI_PROJECT_NAME;
   if (_projNameCache && _projNameCache.cwd === cwd) return _projNameCache.name;
 
   let dir = path.resolve(cwd);
