@@ -300,7 +300,7 @@ export function runMemoryMaintenance(cwd: string): void {
     const child = spawn(cmd, {
       shell: true,
       cwd: PATHS.projectDir(cwd),
-      env: { ...process.env, PI_SUBAGENT: "1" },
+      env: { ...process.env, PI_SUBAGENT: "1", PI_PROJECT_NAME: getProjectName(cwd) },
       stdio: ["pipe", logFd, logFd],
       // Windows: detached+shell+管道 stdio 会挂起(修复 #23),用 windowsHide;
       // Linux/Mac: detached 是标准后台化方式(setsid 脱离终端,父退出后子进程存活)。
@@ -344,6 +344,9 @@ export function spawnConsolidationSubagent(sessionDir: string): void {
   const extractorPrompt = path.join(HOME, ".pi", "agent", "agents", "memory-extractor.md");
   if (!fs.existsSync(extractorPrompt)) return;
 
+  // sessionDir = .../projects/<name>/turns/sessions/<id> → 项目名 = 上上上级的 basename
+  const projectName = path.basename(path.dirname(path.dirname(path.dirname(sessionDir))));
+
   let model = "";
   try {
     model = fs
@@ -370,7 +373,7 @@ export function spawnConsolidationSubagent(sessionDir: string): void {
     const child = spawn(cmd, {
       shell: true,
       cwd: sessionDir,
-      env: { ...process.env, PI_SUBAGENT: "1", PI_SESSION_DIR: sessionDir },
+      env: { ...process.env, PI_SUBAGENT: "1", PI_SESSION_DIR: sessionDir, PI_PROJECT_NAME: projectName },
       stdio: ["pipe", logFd, logFd],
       // Windows: detached+shell+管道 stdio 会挂起(修复 #23),用 windowsHide;
       // Linux/Mac: detached 是标准后台化方式(setsid 脱离终端,父退出后子进程存活)。
