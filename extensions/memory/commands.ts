@@ -28,11 +28,11 @@ export function registerCommands(pi: ExtensionAPI): void {
 
       const choice = await ctx.ui.select(
         `Subagent model (current: ${current})`,
-        options.map((id, i) => ({ id: String(i), label: id })),
+        options,
       );
       if (!choice) return;
 
-      const selected = options[Number(choice)];
+      const selected = choice;
       if (!selected) return;
 
       if (selected === "(default)") {
