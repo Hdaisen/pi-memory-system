@@ -62,6 +62,7 @@ export const PATHS = {
   corePrompt: path.join(HOME, ".pi", "agent", "memory", "core-prompt.md"),
   rules: path.join(HOME, ".pi", "agent", "memory", "rules.md"),
   personalDir: path.join(HOME, ".pi", "agent", "memory", "personal"),
+  personalSkillsDir: path.join(HOME, ".pi", "agent", "memory", "personal", "skills"),
 
   // Project-level — centralized under ~/.pi/agent/memory/projects/<name>/
   projectsRoot: path.join(HOME, ".pi", "agent", "memory", "projects"),

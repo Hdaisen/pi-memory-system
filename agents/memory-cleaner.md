@@ -78,9 +78,16 @@ description: <描述，≤1024字符，说明做什么和什么时候用>
 - 不能有连续连字符
 - 示例：`fix-bug-first-write-test`, `read-code-before-discuss`
 
+### 存储位置判断
+| 类型 | 路径 | 判断标准 |
+|------|------|----------|
+| **全局 skills** | `~/.pi/agent/memory/personal/skills/` | 换项目仍然适用（"先写复现测试再修bug"） |
+| **项目 skills** | `~/.pi/agent/memory/projects/<name>/skills/` | 仅本项目有用（"pi-memory-system的固化流程"） |
+
 ### 写入逻辑
 - 遍历 memories/ 下所有文件，识别符合标准的模式
-- 检查 skills/ 目录已有条目，避免重复
+- 检查**两个** skills 目录已有条目，避免重复
+- 根据作用域判断写入全局还是项目目录
 - 已有 skill 发现更强证据 → 更新（用 edit）
 - 发现失败案例 → 修正步骤或 supersede
 - 发现多个 skill 描述类似模式 → 合并
