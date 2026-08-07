@@ -54,7 +54,9 @@ export function registerCommands(pi: ExtensionAPI): void {
       const cwd = ctx.cwd;
       const model = getSubagentModel();
 
-      const piPath = process.env.PI_PATH || "pi";
+      const isWin = process.platform === "win32";
+      // On Windows, use full path to avoid PowerShell PATH issues
+      const piPath = process.env.PI_PATH || (isWin ? 'F:\\scoop\\apps\\nodejs\\current\\bin\\pi.ps1' : 'pi');
       let cmd = `"${piPath}" -p --no-session --tools read,write,edit,remember,recall,forget,supersede`;
       if (model && model !== "(default)") {
         cmd += ` --model "${model}"`;
