@@ -54,11 +54,14 @@ export function registerCommands(pi: ExtensionAPI): void {
       const cwd = ctx.cwd;
       const model = getSubagentModel();
 
-      let cmd = `pi -p --no-session --tools read,write,edit,remember,recall,forget,supersede`;
+      const piPath = process.env.PI_PATH || "pi";
+      let cmd = `"${piPath}" -p --no-session --tools read,write,edit,remember,recall,forget,supersede`;
       if (model && model !== "(default)") {
         cmd += ` --model "${model}"`;
       }
       cmd += ` --append-system-prompt "${CLEANER_PROMPT}"`;
+      const isWin = process.platform === "win32";
+      const shell = isWin ? "powershell.exe" : undefined;
 
       const prompt =
         "记忆维护（海马体整理）。扫描当前项目的长期记忆（memories/）与全局记忆（personal/）并执行清理：" +
@@ -84,8 +87,7 @@ export function registerCommands(pi: ExtensionAPI): void {
 
       console.log(`🧹 Memory cleaner running in background — log: ${logPath}`);
 
-      const child = spawn(cmd, {
-        shell: true,
+      const child = spawn(isWin ? "powershell.exe" : "sh", isWin ? ["-Command", cmd] : ["-c", cmd], {
         cwd,
         env: { ...process.env, PI_SUBAGENT: "1" },
         stdio: ["pipe", logFd, logFd],
