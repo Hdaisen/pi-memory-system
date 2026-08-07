@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { HOME, PATHS, getProjectName } from "./config";
-import { safeRead, extractLinks, readLinkedContent, readMemoryIndex, searchMemories, lastSections, countSections } from "./utils";
+import { safeRead, extractLinks, readLinkedContent, readMemoryIndex, searchMemories, lastSections, countSections, readSkills, matchSkills, formatSkillsForPrompt } from "./utils";
 import { isBinaryFile, convertWithMarkitdown } from "./markitdown";
 import { ensureProjectDir, refreshIndex, updateTaskWidget, maintenanceSection, spawnConsolidationSubagent, CONSOLIDATE_AT_SESSION_END } from "./memory-ops";
 
@@ -454,13 +454,23 @@ export function registerHooks(pi: ExtensionAPI): void {
       }
     }
 
-    // 7. Build memory context — stable-first ordering for DeepSeek prefix caching:
+    // 7. Match procedural skills against user prompt and inject
+    let skillsSection = "";
+    if (event.prompt) {
+      const allSkills = readSkills(cwd);
+      const matchedSkills = matchSkills(event.prompt, allSkills);
+      if (matchedSkills.length > 0) {
+        skillsSection = "\n\n---\n\n## Available Skills\n" + formatSkillsForPrompt(matchedSkills);
+      }
+    }
+
+    // 8. Build memory context — stable-first ordering for DeepSeek prefix caching:
     //    core + rules + memory index + dialogue summary are stable/append-only
     //    (they form the cache-hit prefix); essence/notebook change only at
     //    consolidation points (every 5 turns); related/maintenance vary per turn.
     let memoryContext = `${coreSection}\n`;
     if (rules) memoryContext += `\n${rules}\n`;
-    memoryContext += `\n---\n\n${memoryIndexSection}${summarySection}${notebookSection}${linkedSection}${searchResultsSection}${maintenanceSection()}\n`;
+    memoryContext += `\n---\n\n${memoryIndexSection}${summarySection}${notebookSection}${linkedSection}${searchResultsSection}${skillsSection}${maintenanceSection()}\n`;
 
     return {
       systemPrompt: event.systemPrompt + `\n\n${memoryContext}`,

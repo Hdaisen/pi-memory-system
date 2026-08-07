@@ -71,6 +71,8 @@ export const PATHS = {
     path.join(HOME, ".pi", "agent", "memory", "projects", getProjectName(cwd), "notebook.md"),
   memoriesDir: (cwd: string) =>
     path.join(HOME, ".pi", "agent", "memory", "projects", getProjectName(cwd), "memories"),
+  skillsDir: (cwd: string) =>
+    path.join(HOME, ".pi", "agent", "memory", "projects", getProjectName(cwd), "skills"),
   turnsDir: (cwd: string) =>
     path.join(HOME, ".pi", "agent", "memory", "projects", getProjectName(cwd), "turns"),
 };
