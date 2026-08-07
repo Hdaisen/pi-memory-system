@@ -257,6 +257,7 @@ export interface Skill {
   name: string;
   description: string;
   filePath: string; // absolute path to SKILL.md
+  scope: "project" | "global"; // 存储范围
 }
 
 /**
@@ -277,14 +278,10 @@ function parseSkillFrontmatter(content: string): { name: string; description: st
 }
 
 /**
- * Scan skills/ directory for SKILL.md files, parse frontmatter.
- * Only project-level skills (not global — global skills are static,
- * loaded by Pi core from ~/.pi/agent/skills/).
+ * Scan a skills directory for SKILL.md files, parse frontmatter.
  */
-export function readSkills(cwd: string): Skill[] {
-  const dir = PATHS.skillsDir(cwd);
+function scanSkillsDir(dir: string, scope: "project" | "global"): Skill[] {
   if (!fs.existsSync(dir)) return [];
-
   const skills: Skill[] = [];
   const items = fs.readdirSync(dir, { withFileTypes: true });
   for (const item of items) {
@@ -299,10 +296,27 @@ export function readSkills(cwd: string): Skill[] {
         name: parsed.name,
         description: parsed.description,
         filePath: skillPath,
+        scope,
       });
     }
   }
   return skills;
+}
+
+/**
+ * Scan both project-level and global skills directories.
+ * Project skills override global skills with same name.
+ */
+export function readSkills(cwd: string): Skill[] {
+  const globalSkills = scanSkillsDir(PATHS.personalSkillsDir, "global");
+  const projectSkills = scanSkillsDir(PATHS.skillsDir(cwd), "project");
+
+  // Merge: project skills override global skills with same name
+  const skillMap = new Map<string, Skill>();
+  for (const s of globalSkills) skillMap.set(s.name, s);
+  for (const s of projectSkills) skillMap.set(s.name, s);
+
+  return Array.from(skillMap.values());
 }
 
 /**
