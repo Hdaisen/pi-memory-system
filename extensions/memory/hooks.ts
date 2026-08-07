@@ -96,6 +96,7 @@ function runExtractionWithProgress(
   scriptPath: string,
   messages: any[],
   cwd: string,
+  skipSubagent = false,
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     if (typeof ctx.ui.custom !== "function") {
@@ -205,7 +206,9 @@ function runExtractionWithProgress(
         if (!settled) { childProc?.kill(); finish(false); }
       }, 360000);
 
-      childProc = spawn("python3", [scriptPath], {
+      const args = [scriptPath];
+      if (skipSubagent) args.push("--skip-subagent");
+      childProc = spawn("python3", args, {
         cwd,
         stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env, PI_SUBAGENT: "1", PI_SESSION_DIR: _sessionDir ?? "", PI_PROJECT_NAME: getProjectName(cwd) },
@@ -280,6 +283,7 @@ async function runExtractionSimple(
   scriptPath: string,
   messages: any[],
   cwd: string,
+  skipSubagent = false,
 ): Promise<void> {
   ctx.ui.setStatus("memory", "🧠 ⏳ extracting...");
 
@@ -288,7 +292,9 @@ async function runExtractionSimple(
     const timer = setTimeout(() => ac.abort(), 360000);
 
     const stderr = await new Promise<string>((resolve, reject) => {
-      const child = spawn("python3", [scriptPath], {
+      const args = [scriptPath];
+      if (skipSubagent) args.push("--skip-subagent");
+      const child = spawn("python3", args, {
         cwd,
         stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env, PI_SUBAGENT: "1", PI_SESSION_DIR: _sessionDir ?? "", PI_PROJECT_NAME: getProjectName(cwd) },
@@ -562,11 +568,10 @@ export function registerHooks(pi: ExtensionAPI): void {
     // Guard 1: Prevent subagent recursion
     if (process.env.PI_SUBAGENT === "1") return;
 
-    // Guard 2: Session was aborted (user pressed ESC)
-    if (_agentAborted) {
-      _agentAborted = false;
-      return;
-    }
+    // Check if session was aborted (user pressed ESC)
+    // Even if aborted, we still write raw/dialogue-summary for context continuity
+    const wasAborted = _agentAborted;
+    _agentAborted = false;
 
     const messages = (_event as any)?.messages;
 
@@ -591,8 +596,8 @@ export function registerHooks(pi: ExtensionAPI): void {
     const roundNo = countSections(safeRead(summaryFile) ?? "") + 1;
     const isConsolidation = roundNo % 5 === 0;
 
-    if (isConsolidation) {
-      // 固化轮:显示完整进度面板(spinner + 子代理日志)
+    if (isConsolidation && !wasAborted) {
+      // 固化轮且未被中断:显示完整进度面板(spinner + 子代理日志)
       try {
         await runExtractionWithProgress(ctx, scriptPath, messages, cwd);
       } catch (e: unknown) {
@@ -610,9 +615,10 @@ export function registerHooks(pi: ExtensionAPI): void {
         }
       }
     } else {
-      // 非固化轮:仅状态栏提示,不弹面板
+      // 非固化轮 或 被中断:仅状态栏提示,不弹面板
+      // 被中断时 skipSubagent=true,只写文件不启动子代理
       try {
-        await runExtractionSimple(ctx, scriptPath, messages, cwd);
+        await runExtractionSimple(ctx, scriptPath, messages, cwd, wasAborted);
       } catch (e: unknown) {
         console.warn("[memory] extraction failed:", e instanceof Error ? e.message : String(e));
       }

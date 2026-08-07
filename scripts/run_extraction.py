@@ -511,6 +511,9 @@ def main():
     # which means the progress panel shows nothing until the buffer fills or flushes.
     sys.stderr.reconfigure(line_buffering=True)
 
+    # Parse command line arguments
+    skip_subagent = "--skip-subagent" in sys.argv
+
     # 从 stdin 读取消息
     raw = sys.stdin.read()
     messages = json.loads(raw)
@@ -550,7 +553,9 @@ def main():
 
         # 3. 固化判定:节数即轮次,每 CONSOLIDATE_EVERY 轮异步跑一次固化子代理
         #    (只沉淀长期记忆;notebook 由主 LLM 维护)。中间轮只写文件,不启动子代理。
-        if round_no % CONSOLIDATE_EVERY == 0:
+        if skip_subagent:
+            print(f"[extract] · 跳过子代理(--skip-subagent)", file=sys.stderr)
+        elif round_no % CONSOLIDATE_EVERY == 0:
             spawn_subagent(turns_dir)
             print(f"[extract] ✓ consolidation triggered (round {round_no})", file=sys.stderr)
         else:
