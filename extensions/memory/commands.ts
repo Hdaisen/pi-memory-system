@@ -62,8 +62,6 @@ export function registerCommands(pi: ExtensionAPI): void {
         cmd += ` --model "${model}"`;
       }
       cmd += ` --append-system-prompt "${CLEANER_PROMPT}"`;
-      const isWin = process.platform === "win32";
-      const shell = isWin ? "powershell.exe" : undefined;
 
       const prompt =
         "记忆维护（海马体整理）。扫描当前项目的长期记忆（memories/）与全局记忆（personal/）并执行清理：" +
