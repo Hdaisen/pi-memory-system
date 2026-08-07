@@ -1,0 +1,25 @@
+{
+  "task_id": "20260805-074648-1-deepseek-2-3-llm",
+  "goal": "现在对本机记忆系统进行改进，从这几个方向入手：1.由于每次都是记忆系统控制的每轮对话上下文，所以不会存在上下文爆炸的问题。但是有可能会出现模型供应商缓存命中率低的问题，这方面能否优化？就基于deepseek来优化。2.每次对话后都会启动一个子代理来总结此轮对话、编写小本本、编辑长期记忆。这个是否合理？每次用户想要进行下一轮对话，等待时间是否过长？3.每轮新对话，主LLM是否真的会知道当前对话内容，有哪些是可以直接去查询长期记忆的？长期记忆的存储与提取是否真的有效？别只是存了而已，每次对话还是什么都不知道？-----------先从这些方面入手来分析吧，你也可以在看代码、推理的时候提出你的优化意见，可能不只是我说的这些问题。",
+  "scope": null,
+  "non_goals": null,
+  "allowed_operations": {
+    "write": true,
+    "network": false,
+    "publish": false
+  },
+  "success_criteria": [
+    {
+      "id": "objective_evidence",
+      "description": "The goal outcome is supported by direct evidence, such as inspected code, reproduced behavior, source material, or concrete findings.",
+      "required": true,
+      "evidence_ids": null
+    },
+    {
+      "id": "verification",
+      "description": "The result has relevant verification evidence, such as tests, commands, benchmarks, manual checks, or a documented reason why verification is not applicable.",
+      "required": true,
+      "evidence_ids": null
+    }
+  ]
+}
