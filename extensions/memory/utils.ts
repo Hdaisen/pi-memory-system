@@ -249,6 +249,93 @@ export function searchMemories(
     .map(r => `- **${r.file}** (${r.score} matches)\n  ${r.content.split("\n").slice(0, 3).join("\n  ")}`);
 }
 
+// ============================================================
+// Skills — procedural memory (triggered by prompt matching)
+// ============================================================
+
+export interface Skill {
+  name: string;
+  description: string;
+  filePath: string; // absolute path to SKILL.md
+}
+
+/**
+ * Parse SKILL.md frontmatter: extract name and description.
+ * Format mirrors Pi's agent skills specification.
+ */
+function parseSkillFrontmatter(content: string): { name: string; description: string } | null {
+  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return null;
+  const fm = match[1];
+  const nameMatch = fm.match(/^name:\s*(.+)$/m);
+  const descMatch = fm.match(/^description:\s*(.+)$/m);
+  if (!nameMatch || !descMatch) return null;
+  return {
+    name: nameMatch[1].trim(),
+    description: descMatch[1].trim(),
+  };
+}
+
+/**
+ * Scan skills/ directory for SKILL.md files, parse frontmatter.
+ * Only project-level skills (not global — global skills are static,
+ * loaded by Pi core from ~/.pi/agent/skills/).
+ */
+export function readSkills(cwd: string): Skill[] {
+  const dir = PATHS.skillsDir(cwd);
+  if (!fs.existsSync(dir)) return [];
+
+  const skills: Skill[] = [];
+  const items = fs.readdirSync(dir, { withFileTypes: true });
+  for (const item of items) {
+    if (!item.isDirectory()) continue;
+    const skillPath = path.join(dir, item.name, "SKILL.md");
+    if (!fs.existsSync(skillPath)) continue;
+    const content = safeRead(skillPath);
+    if (!content) continue;
+    const parsed = parseSkillFrontmatter(content);
+    if (parsed) {
+      skills.push({
+        name: parsed.name,
+        description: parsed.description,
+        filePath: skillPath,
+      });
+    }
+  }
+  return skills;
+}
+
+/**
+ * Match skills against user prompt using keyword overlap.
+ * Returns skills whose description contains prompt keywords.
+ */
+export function matchSkills(userPrompt: string, skills: Skill[]): Skill[] {
+  if (!userPrompt || skills.length === 0) return [];
+  const keywords = extractKeywords(userPrompt);
+  if (keywords.length === 0) return [];
+
+  return skills.filter((skill) => {
+    const lower = skill.description.toLowerCase();
+    return keywords.some((kw) => lower.includes(kw));
+  });
+}
+
+/**
+ * Format matched skills for injection into system prompt.
+ * Mirrors Pi's agent skills XML format (spec: agentskills.io).
+ */
+export function formatSkillsForPrompt(skills: Skill[]): string {
+  if (skills.length === 0) return "";
+  const items = skills
+    .map((s) => `  <skill>\n    <name>${s.name}</name>\n    <description>${s.description}</description>\n  </skill>`)
+    .join("\n");
+  return `\n<available-memory-skills>\n${items}\n</available-memory-skills>\n`;
+}
+
+// ============================================================
+// Linked content (wiki-links)
+// ============================================================
+
 /** Read linked files and extract relevant paragraphs. */
 export function readLinkedContent(
   links: string[],
