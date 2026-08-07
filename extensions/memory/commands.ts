@@ -55,13 +55,34 @@ export function registerCommands(pi: ExtensionAPI): void {
       const model = getSubagentModel();
 
       const isWin = process.platform === "win32";
-      // On Windows, use full path to avoid PowerShell PATH issues
-      const piPath = process.env.PI_PATH || (isWin ? 'F:\\scoop\\apps\\nodejs\\current\\bin\\pi.ps1' : 'pi');
-      let cmd = `"${piPath}" -p --no-session --tools read,write,edit,remember,recall,forget,supersede`;
-      if (model && model !== "(default)") {
-        cmd += ` --model "${model}"`;
+      // Directly invoke node + cli.js to avoid PowerShell stdin pipeline issues
+      // (pi.ps1 checks $MyInvocation.ExpectingInput which breaks under -Command)
+      // Cross-platform: use process.execPath (the node.exe running Pi) to find cli.js
+      const nodeBin = process.execPath;
+      // cli.js is installed alongside pi in node_modules/@earendil-works/pi-coding-agent/
+      // On Windows: node.exe is at scoop/apps/nodejs/current/node.exe, cli.js at .../bin/node_modules/.../cli.js
+      // On Linux/Mac: node might be /usr/local/bin/node, cli.js via npm global
+      let cliJs: string;
+      if (isWin) {
+        // Windows: derive from node.exe location
+        const scoopRoot = path.dirname(nodeBin); // F:\scoop\apps\nodejs\current
+        cliJs = path.join(scoopRoot, "bin", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
+      } else {
+        // Linux/Mac: try npm global prefix, fallback to local dev path
+        try {
+          const { execSync } = require("child_process");
+          const npmRoot = execSync("npm root -g", { encoding: "utf8" }).trim();
+          cliJs = path.join(npmRoot, "@earendil-works", "pi-coding-agent", "dist", "cli.js");
+        } catch {
+          // Fallback: assume dev environment, use local path
+          cliJs = path.join(cwd, "..", "..", "..", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
+        }
       }
-      cmd += ` --append-system-prompt "${CLEANER_PROMPT}"`;
+      const args = [cliJs, "-p", "--no-session", "--tools", "read,write,edit,remember,recall,forget,supersede"];
+      if (model && model !== "(default)") {
+        args.push("--model", model);
+      }
+      args.push("--append-system-prompt", CLEANER_PROMPT);
 
       const prompt =
         "记忆维护（海马体整理）。扫描当前项目的长期记忆（memories/）与全局记忆（personal/）并执行清理：" +
@@ -87,7 +108,7 @@ export function registerCommands(pi: ExtensionAPI): void {
 
       console.log(`🧹 Memory cleaner running in background — log: ${logPath}`);
 
-      const child = spawn(isWin ? "powershell.exe" : "sh", isWin ? ["-Command", cmd] : ["-c", cmd], {
+      const child = spawn(nodeBin, args, {
         cwd,
         env: { ...process.env, PI_SUBAGENT: "1" },
         stdio: ["pipe", logFd, logFd],
