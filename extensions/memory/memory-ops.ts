@@ -335,7 +335,6 @@ export function runMemoryMaintenance(cwd: string): void {
   } catch { /* spawn failure — non-fatal */ }
 }
 
-/**
 export function getSubagentModel(): string {
   try {
     return fs
