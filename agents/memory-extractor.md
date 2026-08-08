@@ -39,6 +39,20 @@ defaultContext: fresh
 
 路径：`~/.pi/agent/memory/projects/<name>/memories/*.md` 或 `~/.pi/agent/memory/personal/*.md`
 
+### 三机制边界（先判断：这个信号属于哪一层？）
+
+记忆系统有三层沉淀机制，**先判定信号类型再写**，别让认知进错层：
+
+| 信号本质 | 进哪层 | 写入方式 |
+|---------|--------|----------|
+| **知识/事实**（发生了什么、环境配置、结论） | memories | `remember`（fact/event/decision） |
+| **方法论/可复用做法**（"先写复现测试再修 bug"、"讨论前先读代码"） | memories **记录事件** + 标记 skill 候选 | `remember` 时 tags 加 `skill-candidate`，或正文注明"可提炼为 skill" |
+| **无条件行为约束**（"以后都…"/"永远不要…"，跨项目） | **直达 rules.md** | 见下方「固化全局行为规则」任务 |
+
+**职责边界**：
+- 你（固化子代理）**不直接写 SKILL.md**——技能提炼是海马体的活（避免双写冲突）。你要做的是：识别方法论信号 → 写入 memories 并标记 `skill-candidate`，海马体整理时据此提炼。
+- 判断失误的成本：行为约束误入 memories → 只被 recall 到、不常驻生效（漏规则）；方法论误入 rules → 稳定区被噪音污染（每轮注入浪费）。
+
 ### 短期 vs 长期
 
 - 短期记忆（dialogue-summary，滚动窗口）→ 主 LLM 每轮注入最后 5 轮，无需你处理
