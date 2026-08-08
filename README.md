@@ -215,11 +215,21 @@ cd pi-memory-system
 The init script:
 1. Creates `~/.pi/agent/memory/projects/<name>/` structure
 2. Copies templates (`core-prompt.md`, `rules.md`, `notebook.md`, memory entries)
-3. Installs the extension to `~/.pi/agent/extensions/`
-4. Installs required Pi packages (`@ollama/pi-web-search`, `context-mode`, `my-pi-themes@1.0.0`, `pi-mcp-adapter`, `pi-subagents`)
+3. Installs the **core extension** to `~/.pi/agent/extensions/` (memory system — **zero extra packages**)
+4. **Lists** optional Pi packages (pi-subagents etc.) — nothing is force-installed
 5. Restart Pi or run `/reload`
 
-> **Tip**: if `pi update` fails on `my-pi-themes@latest` (the package was unpublished upstream), pin it in `settings.json` as `"npm:my-pi-themes@1.0.0"`.
+**Optional extras** — `./scripts/init.sh --with-extras` also installs `auto.ts`, `ocr.ts`, `token-tracker.ts` (see dependency matrix below).
+
+### Dependency matrix
+
+| Component | Dependencies | Install
+|-----------|-------------|--------|
+| **Core memory system** (`memory.ts` + `memory/`) | pi CLI + Python 3 only | default |
+| `auto.ts` (auto task loop) | **@ifi/pi-spec** (`/spec:tasks` + tasks.md) | `--with-extras` |
+| `ocr.ts` (PaddleOCR) | system-level PaddleOCR | `--with-extras` |
+| `token-tracker.ts` | none | `--with-extras` |
+| Optional: `pi-subagents` | — | opt-in (`pi install npm:pi-subagents`) |
 
 ## Design Principles
 

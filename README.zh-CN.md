@@ -203,11 +203,21 @@ cd pi-memory-system
 初始化脚本会：
 1. 创建 `~/.pi/agent/memory/projects/<name>/` 目录结构
 2. 复制模板（`core-prompt.md`、`rules.md`、`notebook.md`、记忆条目）
-3. 安装扩展到 `~/.pi/agent/extensions/`
-4. 安装所需 Pi 包（`@ollama/pi-web-search`、`context-mode`、`my-pi-themes@1.0.0`、`pi-mcp-adapter`、`pi-subagents`）
+3. 安装**核心扩展**到 `~/.pi/agent/extensions/`（记忆系统——**零额外包依赖**）
+4. **列出**可选 Pi 包（pi-subagents 等）——不强制安装，由你决定
 5. 重启 Pi 或运行 `/reload`
 
-> **提示**：如果 `pi update` 因 `my-pi-themes@latest` 失败（上游包已 unpublish），在 `settings.json` 里固定版本 `"npm:my-pi-themes@1.0.0"`。
+**可选扩展**——`./scripts/init.sh --with-extras` 会额外安装 `auto.ts`、`ocr.ts`、`token-tracker.ts`（依赖见下）。
+
+### 依赖矩阵
+
+| 组件 | 依赖 | 安装 |
+|------|------|------|
+| **核心记忆系统**（`memory.ts` + `memory/`） | 仅 pi CLI + Python 3 | 默认 |
+| `auto.ts`（自动任务循环） | **@ifi/pi-spec**（`/spec:tasks` + tasks.md） | `--with-extras` |
+| `ocr.ts`（PaddleOCR） | 系统级 PaddleOCR | `--with-extras` |
+| `token-tracker.ts` | 无 | `--with-extras` |
+| 可选：`pi-subagents` | — | 手动（`pi install npm:pi-subagents`） |
 
 ## 记忆演化（认知设计）
 

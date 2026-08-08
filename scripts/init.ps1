@@ -4,11 +4,12 @@
 
 .DESCRIPTION
     This script sets up the Pi Memory System in your current project:
-    1. Creates .pi/memory/ directory structure
+    1. Creates ~/.pi/agent/memory/projects/<name>/ directory structure
     2. Copies template files for customization
-    3. Installs the extension globally (first time only)
-    4. Installs required Pi packages (@ollama/pi-web-search, context-mode, my-pi-themes@1.0.0, pi-mcp-adapter, pi-subagents)
-    5. Creates the global core-prompt.md (first time only)
+    3. Installs the core memory extension (memory.ts + memory/)
+    4. Optionally installs extra extensions (auto/ocr/token-tracker) with -WithExtras
+    5. Checks optional Pi packages (pi-subagents etc.) — lists, does NOT force-install
+    6. Creates the global core-prompt.md (first time only)
 
 .PARAMETER ProjectDir
     Target project directory. Defaults to current directory.
@@ -17,19 +18,23 @@
     Skip extension installation (useful if already installed).
 
 .PARAMETER SkipPackages
-    Skip Pi package installation (useful if already installed).
+    Skip Pi package check (useful if already installed).
+
+.PARAMETER WithExtras
+    Also install extra extensions (auto.ts → needs @ifi/pi-spec, ocr.ts → needs PaddleOCR, token-tracker.ts).
 
 .EXAMPLE
     .\scripts\init.ps1
     .\scripts\init.ps1 -ProjectDir "C:\MyProject"
     .\scripts\init.ps1 -SkipExtension
-    .\scripts\init.ps1 -SkipPackages
+    .\scripts\init.ps1 -WithExtras
 #>
 
 param(
     [string]$ProjectDir = (Get-Location).Path,
     [switch]$SkipExtension,
-    [switch]$SkipPackages
+    [switch]$SkipPackages,
+    [switch]$WithExtras
 )
 
 $ErrorActionPreference = "Stop"
@@ -77,56 +82,67 @@ if (-not (Test-Path $notebookDst)) {
     Write-Host "  ⏭️  Skipped notebook.md (already exists)" -ForegroundColor Gray
 }
 
-# ---- Step 3: Install / update extension ----
+# ---- Step 3: Install / update core extension ----
 if (-not $SkipExtension) {
-    Write-Host "[3/5] Installing extension..." -ForegroundColor Yellow
+    Write-Host "[3/5] Installing core extension..." -ForegroundColor Yellow
     $extDir = Join-Path $HomeDir ".pi" "agent" "extensions"
     New-Item -ItemType Directory -Path $extDir -Force | Out-Null
 
-    # Copy all .ts extension files
+    # Core: memory.ts + memory/ module (memory system, zero extra package deps)
     $srcDir = Join-Path $ScriptRoot "extensions"
-    Get-ChildItem -Path $srcDir -Filter "*.ts" | ForEach-Object {
-        Copy-Item $_.FullName (Join-Path $extDir $_.Name) -Force
-    }
-    # Copy module directory
+    Copy-Item (Join-Path $srcDir "memory.ts") (Join-Path $extDir "memory.ts") -Force
     $moduleSrc = Join-Path $srcDir "memory"
     $moduleDst = Join-Path $extDir "memory"
     if (Test-Path $moduleDst) { Remove-Item $moduleDst -Recurse -Force }
     Copy-Item $moduleSrc $moduleDst -Recurse -Force
-    Write-Host "  ✅ Installed extension to $extDir" -ForegroundColor Green
+
+    # Extras (optional): auto / ocr / token-tracker — only with -WithExtras
+    if ($WithExtras) {
+        foreach ($extra in @("auto.ts", "ocr.ts", "token-tracker.ts")) {
+            $extraSrc = Join-Path $srcDir $extra
+            if (Test-Path $extraSrc) { Copy-Item $extraSrc (Join-Path $extDir $extra) -Force }
+        }
+        Write-Host "  ✅ Core + extra extensions installed to $extDir" -ForegroundColor Green
+        Write-Host "  ⚠️  extras deps: auto → @ifi/pi-spec, ocr → PaddleOCR (system), token-tracker → none" -ForegroundColor Yellow
+    } else {
+        Write-Host "  ✅ Core extension installed to $extDir" -ForegroundColor Green
+        Write-Host "  ℹ️  Extra extensions (auto/ocr/token-tracker) skipped — use -WithExtras to include" -ForegroundColor Gray
+    }
 } else {
-    Write-Host "[3/5] Skipping extension installation (--SkipExtension)" -ForegroundColor Gray
+    Write-Host "[3/5] Skipping extension installation (-SkipExtension)" -ForegroundColor Gray
 }
 
-# ---- Step 4: Install required Pi packages ----
+# ---- Step 4: Optional Pi packages (list only, never force-install) ----
 if (-not $SkipPackages) {
-    Write-Host "[4/5] Installing required Pi packages..." -ForegroundColor Yellow
-    
+    Write-Host "[4/5] Checking optional Pi packages..." -ForegroundColor Yellow
+    Write-Host "  ℹ️  Memory system core has ZERO required packages (pi CLI + python3 only)." -ForegroundColor Gray
+
     # Check if pi command is available
     $piCommand = Get-Command pi -ErrorAction SilentlyContinue
     if (-not $piCommand) {
-        Write-Host "  ⚠️  'pi' command not found in PATH" -ForegroundColor Yellow
-        Write-Host "  Please install Pi packages manually:" -ForegroundColor Yellow
-        Write-Host "    pi install npm:@ollama/pi-web-search" -ForegroundColor White
-        Write-Host "    pi install npm:context-mode" -ForegroundColor White
-        Write-Host "    pi install npm:my-pi-themes@1.0.0" -ForegroundColor White
-        Write-Host "    pi install npm:pi-mcp-adapter" -ForegroundColor White
-        Write-Host "    pi install npm:pi-subagents" -ForegroundColor White
+        Write-Host "  ⚠️  'pi' command not found in PATH — skip package check" -ForegroundColor Yellow
+        Write-Host "  ℹ️  Optional packages you may want (not required):" -ForegroundColor Gray
+        Write-Host "    pi install npm:pi-subagents   # subagent tool for the main LLM" -ForegroundColor White
+        Write-Host "    pi install npm:@ifi/pi-spec   # spec-driven dev (needed by auto.ts extra)" -ForegroundColor White
     } else {
-        $packages = @("@ollama/pi-web-search", "context-mode", "my-pi-themes@1.0.0", "pi-mcp-adapter", "pi-subagents")
-        foreach ($pkg in $packages) {
-            Write-Host "  Installing $pkg..." -ForegroundColor White
-            try {
-                $output = & pi install "npm:$pkg" 2>&1
-                Write-Host "  ✅ $pkg installed" -ForegroundColor Green
-            } catch {
-                Write-Host "  ⚠️  Failed to install $pkg (may already be installed)" -ForegroundColor Yellow
+        $installed = & pi list 2>&1 | Out-String
+        $optional = @(
+            @{ Name = "pi-subagents";    Spec = "npm:pi-subagents";    Note = "subagent tool for the main LLM" },
+            @{ Name = "@ifi/pi-spec";    Spec = "npm:@ifi/pi-spec";    Note = "spec-driven dev (needed by auto.ts extra)" },
+            @{ Name = "context-mode";    Spec = "npm:context-mode";    Note = "context compression" }
+        )
+        foreach ($p in $optional) {
+            if ($installed -match [regex]::Escape($p.Name)) {
+                Write-Host "  ✅ $($p.Name) — installed" -ForegroundColor Green
+            } else {
+                Write-Host "  ⏭️  $($p.Name) — NOT installed ($($p.Note))" -ForegroundColor Yellow
+                Write-Host "       pi install $($p.Spec)" -ForegroundColor Gray
             }
         }
-        Write-Host "  ✅ Pi packages installation complete" -ForegroundColor Green
+        Write-Host "  ℹ️  These are OPTIONAL — the memory system works without them." -ForegroundColor Gray
     }
 } else {
-    Write-Host "[4/5] Skipping Pi package installation (--SkipPackages)" -ForegroundColor Gray
+    Write-Host "[4/5] Skipping Pi package check (-SkipPackages)" -ForegroundColor Gray
 }
 
 # ---- Step 5: Create global core-prompt (first time only) ----

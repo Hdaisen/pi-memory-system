@@ -8,7 +8,8 @@ set -euo pipefail
 #   ./scripts/init.sh                    # init in current dir
 #   ./scripts/init.sh /path/to/project   # init in specific dir
 #   ./scripts/init.sh --skip-extension   # skip extension install
-#   ./scripts/init.sh --skip-packages    # skip Pi package installation
+#   ./scripts/init.sh --skip-packages    # skip Pi package check
+#   ./scripts/init.sh --with-extras      # also install auto/ocr/token-tracker extras
 # ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -16,12 +17,14 @@ HOME_DIR="${HOME}"
 PROJECT_DIR="${1:-$(pwd)}"
 SKIP_EXTENSION=false
 SKIP_PACKAGES=false
+WITH_EXTRAS=false
 
 # Handle flags
 for arg in "$@"; do
     case "$arg" in
         --skip-extension) SKIP_EXTENSION=true ;;
         --skip-packages) SKIP_PACKAGES=true ;;
+        --with-extras) WITH_EXTRAS=true ;;
     esac
 done
 # If first arg is a flag, use pwd as project dir
@@ -65,48 +68,61 @@ else
     echo "  ⏭️  Skipped notebook.md (already exists)"
 fi
 
-# ---- Step 3: Install / update extension ----
+# ---- Step 3: Install / update core extension ----
 if [ "$SKIP_EXTENSION" = false ]; then
-    echo "[3/5] Installing extension..."
+    echo "[3/5] Installing core extension..."
     ext_dir="$HOME_DIR/.pi/agent/extensions"
     mkdir -p "$ext_dir"
-    # Copy all .ts extension files
-    cp "$SCRIPT_DIR/extensions/"*.ts "$ext_dir/"
-    # Copy memory module directory
+    # Core: memory.ts + memory/ module (memory system, zero extra package deps)
+    cp "$SCRIPT_DIR/extensions/memory.ts" "$ext_dir/"
     rm -rf "$ext_dir/memory"
     cp -r "$SCRIPT_DIR/extensions/memory" "$ext_dir/memory"
-    echo "  ✅ Installed extension to $ext_dir/"
+    # Extras (optional): auto / ocr / token-tracker — only with --with-extras
+    if [ "$WITH_EXTRAS" = true ]; then
+        for extra in auto.ts ocr.ts token-tracker.ts; do
+            if [ -f "$SCRIPT_DIR/extensions/$extra" ]; then
+                cp "$SCRIPT_DIR/extensions/$extra" "$ext_dir/"
+            fi
+        done
+        echo "  ✅ Core + extra extensions installed to $ext_dir/"
+        echo "  ⚠️  extras deps: auto → @ifi/pi-spec, ocr → PaddleOCR (system), token-tracker → none"
+    else
+        echo "  ✅ Core extension installed to $ext_dir/"
+        echo "  ℹ️  Extra extensions (auto/ocr/token-tracker) skipped — use --with-extras to include"
+    fi
 else
     echo "[3/5] Skipping extension installation (--skip-extension)"
 fi
 
-# ---- Step 4: Install required Pi packages ----
+# ---- Step 4: Optional Pi packages (list only, never force-install) ----
 if [ "$SKIP_PACKAGES" = false ]; then
-    echo "[4/5] Installing required Pi packages..."
-    
+    echo "[4/5] Checking optional Pi packages..."
+    echo "  ℹ️  Memory system core has ZERO required packages (pi CLI + python3 only)."
+
     # Check if pi command is available
     if ! command -v pi &> /dev/null; then
-        echo "  ⚠️  'pi' command not found in PATH"
-        echo "  Please install Pi packages manually:"
-        echo "    pi install npm:@ollama/pi-web-search"
-        echo "    pi install npm:context-mode"
-        echo "    pi install npm:my-pi-themes@1.0.0"
-        echo "    pi install npm:pi-mcp-adapter"
-        echo "    pi install npm:pi-subagents"
+        echo "  ⚠️  'pi' command not found in PATH — skip package check"
+        echo "  ℹ️  Optional packages you may want (not required):"
+        echo "    pi install npm:pi-subagents   # subagent tool for the main LLM"
+        echo "    pi install npm:@ifi/pi-spec   # spec-driven dev (needed by auto.ts extra)"
     else
-        PACKAGES=("@ollama/pi-web-search" "context-mode" "my-pi-themes@1.0.0" "pi-mcp-adapter" "pi-subagents")
-        for pkg in "${PACKAGES[@]}"; do
-            echo "  Installing $pkg..."
-            if pi install "npm:$pkg" 2>/dev/null; then
-                echo "  ✅ $pkg installed"
+        INSTALLED=$(pi list 2>&1 || true)
+        check_optional() {
+            local name="$1" spec="$2" note="$3"
+            if echo "$INSTALLED" | grep -qi "$name"; then
+                echo "  ✅ $name — installed"
             else
-                echo "  ⚠️  Failed to install $pkg (may already be installed)"
+                echo "  ⏭️  $name — NOT installed ($note)"
+                echo "       pi install $spec"
             fi
-        done
-        echo "  ✅ Pi packages installation complete"
+        }
+        check_optional "pi-subagents" "npm:pi-subagents" "subagent tool for the main LLM"
+        check_optional "@ifi/pi-spec" "npm:@ifi/pi-spec" "spec-driven dev (needed by auto.ts extra)"
+        check_optional "context-mode" "npm:context-mode" "context compression"
+        echo "  ℹ️  These are OPTIONAL — the memory system works without them."
     fi
 else
-    echo "[4/5] Skipping Pi package installation (--skip-packages)"
+    echo "[4/5] Skipping Pi package check (--skip-packages)"
 fi
 
 # ---- Step 5: Create global core-prompt (first time only) ----
