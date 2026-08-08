@@ -336,6 +336,32 @@ export function runMemoryMaintenance(cwd: string): void {
 }
 
 /**
+export function getSubagentModel(): string {
+  try {
+    return fs
+      .readFileSync(path.join(HOME, ".pi", "agent", "memory", "subagent-model.txt"), "utf-8")
+      .trim();
+  } catch {
+    return "(default)";
+  }
+}
+
+/**
+ * 在 footer 状态栏常驻显示当前 subagent model(不清除,直到重新设置)。
+ * 替代终端 console.log 确认消息:命令选择后 + 会话启动时各更新一次。
+ */
+export function updateSubagentModelStatus(ctx: any): void {
+  const model = getSubagentModel();
+  const theme = ctx.ui.theme;
+  ctx.ui.setStatus(
+    "subagent-model",
+    model && model !== "(default)"
+      ? theme.fg("dim", "subagent: ") + theme.fg("text", model)
+      : theme.fg("dim", "subagent: (default)"),
+  );
+}
+
+/**
  * 会话结束补固化:spawn 固化子代理(pi -p + memory-extractor.md),处理
  * 未固化的余数轮次(consolidation-input.md 由调用方写入)。detached 后台,
  * 不阻塞退出;输出 → sessionDir/consolidation-<ts>.log。

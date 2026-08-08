@@ -5,7 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { HOME, PATHS, getProjectName } from "./config";
 import { safeRead, extractLinks, readLinkedContent, readMemoryIndex, searchMemories, lastSections, countSections, readSkills, matchSkills, formatSkillsForPrompt } from "./utils";
 import { isBinaryFile, convertWithMarkitdown } from "./markitdown";
-import { ensureProjectDir, refreshIndex, updateTaskWidget, maintenanceSection, spawnConsolidationSubagent, CONSOLIDATE_AT_SESSION_END } from "./memory-ops";
+import { ensureProjectDir, refreshIndex, updateTaskWidget, maintenanceSection, spawnConsolidationSubagent, CONSOLIDATE_AT_SESSION_END, updateSubagentModelStatus } from "./memory-ops";
 
 /** Flag: set when the current agent session is aborted (ESC).
  *  ctx.signal is undefined during agent_end (turn already cleaned up),
@@ -380,6 +380,7 @@ export function registerHooks(pi: ExtensionAPI): void {
       }
     }
     ctx.ui.setStatus("memory", "🧠 🟢");
+    updateSubagentModelStatus(ctx);
     updateTaskWidget(ctx.cwd, ctx);
   });
 
