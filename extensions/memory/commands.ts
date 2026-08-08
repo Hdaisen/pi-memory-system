@@ -111,13 +111,13 @@ export function registerCommands(pi: ExtensionAPI): void {
         ctx.ui.setStatus("memory-clean", theme.fg("accent", frames[i]) + theme.fg("dim", " memory-clean 运行中…"));
       }, 120);
 
-      console.log(`🧹 Memory cleaner running in background — log: ${logPath}`);
-
       const child = spawn(nodeBin, args, {
         cwd,
         env: { ...process.env, PI_SUBAGENT: "1" },
         stdio: ["pipe", logFd, logFd],
-        detached: true,
+        // Windows: detached+管道 stdio 会弹新控制台窗口且挂起(修复 #23 同因),用 windowsHide;
+        // Linux/Mac: detached 是标准后台化方式(setsid 脱离终端)。
+        ...(process.platform === "win32" ? { windowsHide: true } : { detached: true }),
       });
       child.stdin?.write(prompt);
       child.stdin?.end();
