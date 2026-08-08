@@ -2,8 +2,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
-import { HOME } from "./config";
-import { getSubagentModel, updateSubagentModelStatus, buildNetworkHealthReport } from "./memory-ops";
+import { HOME, getProjectName } from "./config";
+import { getSubagentModel, updateSubagentModelStatus, buildNetworkHealthReport, updateMaintenanceRecords } from "./memory-ops";
 
 export function registerCommands(pi: ExtensionAPI): void {
   const SUBAGENT_MODEL_FILE = path.join(HOME, ".pi", "agent", "memory", "subagent-model.txt");
@@ -130,6 +130,7 @@ export function registerCommands(pi: ExtensionAPI): void {
         clearInterval(timer);
         ctx.ui.setStatus("memory-clean", undefined);
         try { fs.closeSync(logFd); } catch { /* already closed */ }
+        updateMaintenanceRecords(logPath, getProjectName(cwd));
         ctx.ui.notify(msg, type);
       };
       child.on("exit", (code) => {

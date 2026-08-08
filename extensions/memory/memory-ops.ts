@@ -420,6 +420,37 @@ export function buildNetworkHealthReport(cwd: string): string {
   return lines.join("\n");
 }
 
+/**
+ * 更新维护记录(last-run.json + maintenance/index.md)。
+ * /memory-clean 命令不走 runMemoryMaintenance,完成时需同步记录,
+ * 否则 maintenanceSection() 注入的"最近整理"滞后。
+ */
+export function updateMaintenanceRecords(logPath: string, project: string): void {
+  try {
+    fs.mkdirSync(MAINTENANCE_DIR, { recursive: true });
+    fs.writeFileSync(
+      LAST_RUN_FILE,
+      JSON.stringify(
+        { lastRun: new Date().toISOString(), logFile: logPath, project },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const logs = fs
+      .readdirSync(MAINTENANCE_DIR)
+      .filter((f) => f.startsWith("clean-") && f.endsWith(".log"))
+      .sort()
+      .reverse()
+      .slice(0, 20);
+    fs.writeFileSync(
+      path.join(MAINTENANCE_DIR, "index.md"),
+      `# 记忆维护日志\n\n${logs.map((l) => `- [[${l}]]`).join("\n")}\n`,
+      "utf-8",
+    );
+  } catch { /* non-fatal */ }
+}
+
 export function getSubagentModel(): string {
   try {
     return fs
