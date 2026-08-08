@@ -3,16 +3,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { HOME } from "./config";
-import { safeRead } from "./utils";
+import { getSubagentModel, updateSubagentModelStatus } from "./memory-ops";
 
 export function registerCommands(pi: ExtensionAPI): void {
   const SUBAGENT_MODEL_FILE = path.join(HOME, ".pi", "agent", "memory", "subagent-model.txt");
   const CLEANER_PROMPT = path.join(HOME, ".pi", "agent", "agents", "memory-cleaner.md");
-
-  function getSubagentModel(): string {
-    const saved = safeRead(SUBAGENT_MODEL_FILE);
-    return saved?.trim() || "(default)";
-  }
 
   pi.registerCommand("subagent-model", {
     description: "Pick model for memory-extractor subagent",
@@ -40,7 +35,7 @@ export function registerCommands(pi: ExtensionAPI): void {
       } else {
         fs.writeFileSync(SUBAGENT_MODEL_FILE, selected, "utf-8");
       }
-      console.log(`✓ Subagent model set to: ${selected}`);
+      updateSubagentModelStatus(ctx);
     },
   });
 
