@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { HOME, PATHS, getProjectName } from "./config";
-import { safeRead, walkMarkdownFiles } from "./utils";
+import { safeRead, walkMarkdownFiles, parseMemoryEntries } from "./utils";
 
 /**
  * Refresh _index.md by scanning all .md files in the memory directory.
@@ -18,6 +18,8 @@ export function refreshIndex(cwd: string, scope: "project" | "global"): void {
     section: string;
     date?: string;
     confidence?: string;
+    tags: string[];
+    superseded: boolean;
   }[] = [];
 
   const files = walkMarkdownFiles(targetDir);
@@ -26,20 +28,14 @@ export function refreshIndex(cwd: string, scope: "project" | "global"): void {
     const content = safeRead(filePath);
     if (!content) continue;
 
-    const sections = content.split(/(?=^## )/m);
-    for (const section of sections) {
-      const titleMatch = section.match(/^## (.+)/m);
-      if (!titleMatch) continue;
-      const title = titleMatch[1].trim();
-
-      const dateMatch = section.match(/- Date: (\d{4}-\d{2}-\d{2})/);
-      const confidenceMatch = section.match(/\[(confirmed|inferred|intuition)\]/);
-
+    for (const entry of parseMemoryEntries(content, relativePath)) {
       entries.push({
         relativePath,
-        section: title,
-        date: dateMatch ? dateMatch[1] : undefined,
-        confidence: confidenceMatch ? confidenceMatch[1] : undefined,
+        section: entry.section,
+        date: entry.date,
+        confidence: entry.confidence,
+        tags: entry.tags,
+        superseded: entry.superseded,
       });
     }
   }
@@ -72,8 +68,13 @@ export function refreshIndex(cwd: string, scope: "project" | "global"): void {
     for (const item of items) {
       const confidence = item.confidence ? ` | \`[${item.confidence}]\`` : "";
       const date = item.date ? ` | ${item.date}` : "";
+      const tags = item.tags.length > 0 ? ` | tags: ${item.tags.join(", ")}` : "";
       const fullLink = `memories/${item.relativePath}`;
-      index += `- [[${fullLink}#${item.section}|${item.section}]]${date}${confidence}\n`;
+      if (item.superseded) {
+        index += `- ~~[[${fullLink}#${item.section}|${item.section}]]~~${date}${confidence} (superseded)\n`;
+      } else {
+        index += `- [[${fullLink}#${item.section}|${item.section}]]${date}${confidence}${tags}\n`;
+      }
     }
     index += "\n";
   }

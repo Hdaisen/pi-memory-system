@@ -127,47 +127,153 @@ export function walkMarkdownFiles(dir: string): string[] {
   return results;
 }
 
+/** 记忆文件中的一个 ## 条目。 */
+export interface MemoryEntry {
+  file: string; // relative path from memory dir (with .md)
+  section: string; // full ## title
+  date?: string;
+  confidence?: string;
+  tags: string[];
+  superseded: boolean;
+}
+
+/** superseded 条目标记(兼容 tools.ts 当前格式 + 历史格式)。 */
+const SUPERSEDED_MARKERS = [
+  /↗\s*\*\*Superseded/,
+  /↗\s*\*\*被取代/,
+  /\+\s*Superseded\s+by/i,
+  /superseded\s*:\s*true/i,
+];
+
+/** 解析记忆文件中的 ## 条目 → 结构化 MemoryEntry(含 tags、superseded 状态)。 */
+export function parseMemoryEntries(content: string, relativePath: string): MemoryEntry[] {
+  const entries: MemoryEntry[] = [];
+  const sections = content.split(/(?=^## )/m);
+  for (const section of sections) {
+    const titleMatch = section.match(/^## (.+)/m);
+    if (!titleMatch) continue;
+    const title = titleMatch[1].trim();
+    const dateMatch = section.match(/- Date: (\d{4}-\d{2}-\d{2})/);
+    const confidenceMatch = section.match(/\[(confirmed|inferred|intuition)\]/);
+    const tagsMatch = section.match(/tags:\s*\[([^\]]*)\]/);
+    const tags = tagsMatch
+      ? tagsMatch[1]
+          .split(/[,，]/)
+          .map((t) => t.trim())
+          .filter(Boolean)
+      : [];
+    const superseded = SUPERSEDED_MARKERS.some((re) => re.test(section));
+    entries.push({
+      file: relativePath,
+      section: title,
+      date: dateMatch ? dateMatch[1] : undefined,
+      confidence: confidenceMatch ? confidenceMatch[1] : undefined,
+      tags,
+      superseded,
+    });
+  }
+  return entries;
+}
+
+/** 提取条目元数据行里的 Related 链接(`Related: [[...]]` 或 `Related: ...`)。 */
+export function extractRelatedLinks(text: string): string[] {
+  const links: string[] = [];
+  const re = /Related:?\s*(.+)/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    for (const l of extractLinks(m[1])) {
+      if (!links.includes(l)) links.push(l);
+    }
+  }
+  return links;
+}
+
+/** 分类目录名 → 语义化标签(供认知地图索引展示)。 */
+const CATEGORY_LABELS: Record<string, string> = {
+  decisions: "决策",
+  events: "事件",
+  facts: "事实",
+  preferences: "偏好",
+};
+
 /**
- * Build a compact memory directory (scope → category → file names) for
- * project and global memories. Injected into the system prompt so the
- * main LLM knows what memories exist without paying the full _index.md
- * size (which can be tens of KB for memory-heavy projects).
+ * Build a cognitive-map memory index for project and global memories.
+ * Injected into the system prompt so the main LLM knows what knowledge
+ * exists (entry titles + confidence + tags), not just which files exist.
+ *
+ * - entries grouped by semantic category, active before superseded
+ * - budget-aware: stops appending once maxChars is exceeded (head preserved)
  */
-export function readMemoryIndex(cwd: string, maxChars = 2000): string {
+export function readMemoryIndex(cwd: string, maxChars = 2500): string {
   const scopes: [string, string][] = [
     ["项目记忆", PATHS.memoriesDir(cwd)],
     ["全局记忆", PATHS.personalDir],
   ];
-  const parts: string[] = [];
+  const lines: string[] = [];
+  let used = 0;
+  let truncated = false;
+
+  const pushLine = (l: string) => {
+    if (used + l.length + 1 > maxChars) {
+      truncated = true;
+      return;
+    }
+    lines.push(l);
+    used += l.length + 1;
+  };
 
   for (const [label, dir] of scopes) {
     if (!fs.existsSync(dir)) continue;
     const files = walkMarkdownFiles(dir);
     if (files.length === 0) continue;
 
-    const byDir = new Map<string, string[]>();
+    const entries: MemoryEntry[] = [];
     for (const f of files) {
       const rel = path.relative(dir, f).replace(/\\/g, "/");
-      const d = path.dirname(rel);
-      if (!byDir.has(d)) byDir.set(d, []);
-      byDir.get(d)!.push(path.basename(f).replace(/\.md$/, ""));
+      const content = safeRead(f);
+      if (!content) continue;
+      entries.push(...parseMemoryEntries(content, rel));
+    }
+    if (entries.length === 0) continue;
+
+    // 分类分组:目录名 → 语义标签
+    const byCat = new Map<string, MemoryEntry[]>();
+    for (const e of entries) {
+      const dirName = path.dirname(e.file);
+      const cat = dirName === "." ? "其他" : (CATEGORY_LABELS[dirName] ?? dirName);
+      if (!byCat.has(cat)) byCat.set(cat, []);
+      byCat.get(cat)!.push(e);
     }
 
-    const lines = [`### ${label}`];
-    for (const [d, names] of [...byDir.entries()].sort()) {
-      const dirLabel = d === "." ? "(顶层)" : `${d}/`;
-      const shown = names.slice(0, 12).join(", ");
-      const more = names.length > 12 ? ` 等 ${names.length} 个文件` : "";
-      lines.push(`- ${dirLabel} ${shown}${more}`);
+    pushLine(`### ${label}`);
+    for (const [cat, items] of [...byCat.entries()].sort()) {
+      // 活跃条目在前(按日期倒序),superseded 沉底
+      const sortByDate = (arr: MemoryEntry[]) =>
+        arr.sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+      const ordered = [...sortByDate(items.filter((i) => !i.superseded)), ...sortByDate(items.filter((i) => i.superseded))];
+
+      const supersededCount = items.filter((i) => i.superseded).length;
+      pushLine(`- **${cat}** · ${items.length} 条`);
+      for (const e of ordered) {
+        if (e.superseded) continue; // 折叠:只计数,条目明细在 _index.md
+        const conf = e.confidence ?? "";
+        const date = e.date ? ` ${e.date.slice(5)}` : "";
+        const meta = `${conf}${date}`.trim();
+        const fileRef = e.file.replace(/^memories\//, "").replace(/\.md$/, "");
+        const label = e.section.length > 36 ? e.section.slice(0, 36) + "…" : e.section;
+        const tags = e.tags.length > 0 ? ` #${e.tags.slice(0, 3).join(" #")}` : "";
+        pushLine(`  - ${label} | ${meta} | ${fileRef}${tags}`);
+      }
+      if (supersededCount > 0) {
+        pushLine(`  - (${supersededCount} 条已 superseded — 见 _index.md)`);
+      }
     }
-    parts.push(lines.join("\n"));
   }
 
-  let out = parts.join("\n\n");
-  if (out.length > maxChars) {
-    out = out.slice(0, maxChars) + "\n…(记忆目录已截断,可对具体主题用 recall 查询)";
+  if (truncated) {
+    lines.push("…(记忆索引已截断,可对具体主题用 recall 查询)");
   }
-  return out;
+  return lines.join("\n");
 }
 
 /**
@@ -186,7 +292,7 @@ export function searchMemories(
   const keywords = extractKeywords(userPrompt);
   if (keywords.length === 0) return [];
 
-  const results: { file: string; content: string; score: number }[] = [];
+  const results: { file: string; content: string; score: number; related: string[] }[] = [];
 
   const searchDir = (dir: string, scope: string) => {
     const files = walkMarkdownFiles(dir);
@@ -210,6 +316,7 @@ export function searchMemories(
                 file: path.relative(dir, filePath).replace(/\\/g, "/"),
                 content: `[${scope}] ${currentSection}\n${preview}`,
                 score,
+                related: extractRelatedLinks(sectionLines.join("\n")),
               });
             }
           }
@@ -233,6 +340,7 @@ export function searchMemories(
             file: path.relative(dir, filePath).replace(/\\/g, "/"),
             content: `[${scope}] ${currentSection}\n${preview}`,
             score,
+            related: extractRelatedLinks(sectionLines.join("\n")),
           });
         }
       }
@@ -246,7 +354,13 @@ export function searchMemories(
 
   return results
     .slice(0, maxResults)
-    .map(r => `- **${r.file}** (${r.score} matches)\n  ${r.content.split("\n").slice(0, 3).join("\n  ")}`);
+    .map(r => {
+      const base = `- **${r.file}** (${r.score} matches)\n  ${r.content.split("\n").slice(0, 3).join("\n  ")}`;
+      const related = r.related.length > 0
+        ? `\n  ↳ 相关: ${r.related.map((l) => `[[${l}]]`).join(", ")}`
+        : "";
+      return base + related;
+    });
 }
 
 // ============================================================
