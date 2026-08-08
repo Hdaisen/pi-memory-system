@@ -7,7 +7,7 @@
     1. Creates .pi/memory/ directory structure
     2. Copies template files for customization
     3. Installs the extension globally (first time only)
-    4. Installs required Pi packages (pi-subagents, context-mode, pi-mcp-adapter)
+    4. Installs required Pi packages (@ollama/pi-web-search, context-mode, my-pi-themes@1.0.0, pi-mcp-adapter, pi-subagents)
     5. Creates the global core-prompt.md (first time only)
 
 .PARAMETER ProjectDir
@@ -107,11 +107,13 @@ if (-not $SkipPackages) {
     if (-not $piCommand) {
         Write-Host "  ⚠️  'pi' command not found in PATH" -ForegroundColor Yellow
         Write-Host "  Please install Pi packages manually:" -ForegroundColor Yellow
-        Write-Host "    pi install npm:pi-subagents" -ForegroundColor White
+        Write-Host "    pi install npm:@ollama/pi-web-search" -ForegroundColor White
         Write-Host "    pi install npm:context-mode" -ForegroundColor White
+        Write-Host "    pi install npm:my-pi-themes@1.0.0" -ForegroundColor White
         Write-Host "    pi install npm:pi-mcp-adapter" -ForegroundColor White
+        Write-Host "    pi install npm:pi-subagents" -ForegroundColor White
     } else {
-        $packages = @("pi-subagents", "context-mode", "pi-mcp-adapter")
+        $packages = @("@ollama/pi-web-search", "context-mode", "my-pi-themes@1.0.0", "pi-mcp-adapter", "pi-subagents")
         foreach ($pkg in $packages) {
             Write-Host "  Installing $pkg..." -ForegroundColor White
             try {

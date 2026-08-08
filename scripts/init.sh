@@ -88,11 +88,13 @@ if [ "$SKIP_PACKAGES" = false ]; then
     if ! command -v pi &> /dev/null; then
         echo "  ⚠️  'pi' command not found in PATH"
         echo "  Please install Pi packages manually:"
-        echo "    pi install npm:pi-subagents"
+        echo "    pi install npm:@ollama/pi-web-search"
         echo "    pi install npm:context-mode"
+        echo "    pi install npm:my-pi-themes@1.0.0"
         echo "    pi install npm:pi-mcp-adapter"
+        echo "    pi install npm:pi-subagents"
     else
-        PACKAGES=("pi-subagents" "context-mode" "pi-mcp-adapter")
+        PACKAGES=("@ollama/pi-web-search" "context-mode" "my-pi-themes@1.0.0" "pi-mcp-adapter" "pi-subagents")
         for pkg in "${PACKAGES[@]}"; do
             echo "  Installing $pkg..."
             if pi install "npm:$pkg" 2>/dev/null; then
