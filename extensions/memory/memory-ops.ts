@@ -387,7 +387,7 @@ export function spawnConsolidationSubagent(sessionDir: string): void {
   const prompt =
     "执行记忆固化（会话结束补跑）。你的当前工作目录(cwd)是记忆会话目录:\n" +
     "- 读 consolidation-input.md（剩余轮次的对话摘要，含关键动作行）\n" +
-    "- 需要细节时 read raw-<n>.md 回查；查重时 read 项目记忆索引（../<project>/memories/_index.md）\n" +
+    "- 需要细节时 read raw-<n>.md 回查；写每条记忆前先对账（recall 当前主题，有则 supersede/merge，没有才新增）\n" +
     "- 只沉淀长期记忆（remember）。不写 notebook（主 LLM 独家维护），不清理记忆文件（海马体的活）\n" +
     `cwd: ${sessionDir}`;
 

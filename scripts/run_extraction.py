@@ -445,7 +445,7 @@ def spawn_subagent(turns_dir: Path):
     prompt_text = (
         f"执行记忆固化。你的当前工作目录(cwd)是记忆会话目录:\n"
         f"- 读 consolidation-input.md(本次窗口的对话摘要,含关键动作行)\n"
-        f"- 需要细节时 read raw-<n>.md 回查;查重时 read 项目记忆索引 ../<project>/memories/_index.md\n"
+        f"- 需要细节时 read raw-<n>.md 回查;写每条记忆前先对账(recall 当前主题,有则 supersede/merge,没有才新增)\n"
         f"- 只沉淀长期记忆(remember)。不写 notebook(主 LLM 独家维护),不清理记忆文件(海马体的活)\n"
         f"cwd: {turns_dir}"
     )
