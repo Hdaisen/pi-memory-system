@@ -63,7 +63,7 @@ Per-session short-term memory lives in `turns/sessions/<id>/` (raw-<n>.md, dialo
 
 Source of truth for code is the installed agent at `~/.pi/agent/`. Changes flow:
 
-1. Edit code at `C:\Users\10342\.pi\agent\extensions\` (or scripts/agents)
+1. Edit code at `~/.pi/agent/extensions/` (or scripts/agents)
 2. Copy changed files to this project repo
 3. Commit and push via branch + PR (main branch is protected)
 
@@ -86,6 +86,13 @@ git push origin feat/<description>
 gh pr create --base main --title "<description>" --body "<details>"
 gh pr merge --squash  # or --merge / --rebase
 ```
+
+### Branch Strategy (main = generic, personal = local)
+
+- **`main` (public)**: generic release version — universal mechanisms and templates only. **Never commit personal identity, paths, or personal workflow rules.**
+- **`personal` (local, not pushed)**: maintainer's own version — identity, local paths, personal rules. Daily work syncs here.
+- Generic changes (`extensions/`, `scripts/`, `agents/` mechanics, `docs/`) stay in sync across both branches; personal content (core-prompt identity section, rules.md personal paths, templates counterparts) lives only in `personal`.
+- Before pushing to `main`: grep for personal keywords (username, `C:\Users\`, `F:\projects\`) — anything personal goes to `personal`, never `main`.
 
 ## Language
 

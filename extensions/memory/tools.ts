@@ -48,7 +48,7 @@ export function registerTools(pi: ExtensionAPI): void {
         trigger: {
           type: "string",
           description:
-            "What triggered this memory. Prefix with type, e.g. 'conversation — Daisen suggested X', 'debugging — found root cause of Y', 'code-review — noticed pattern Z'. Common types: conversation, debugging, code-review, refactoring, experiment, reading, user-feedback, contradiction, external.",
+            "What triggered this memory. Prefix with type, e.g. 'conversation — user suggested X', 'debugging — found root cause of Y', 'code-review — noticed pattern Z'. Common types: conversation, debugging, code-review, refactoring, experiment, reading, user-feedback, contradiction, external.",
         },
         file: {
           type: "string",

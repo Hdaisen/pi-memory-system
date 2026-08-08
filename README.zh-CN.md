@@ -79,11 +79,13 @@
 
 ┌────────────────────────────── 海马体（手动） ─────────────────────────────────┐
 │  你在 Pi 里输入 /memory-clean                                                    │
-│    └─► 海马体子代理（前台运行，输出可见清理报告）                                  │
+│    └─► 海马体子代理（后台运行，报告 → maintenance/clean-<ts>.log）                │
 │          ├─ 修复格式污染（双标题、缺失元数据）                                    │
-│          ├─ 合并重复条目                                                          │
-│          ├─ supersede 过期 / 矛盾条目                                             │
-│          └─ 报告死链与空文件 → maintenance/clean-<ts>.log                         │
+│          ├─ 合并重复 / supersede 过期与矛盾条目                                   │
+│          ├─ 从重复模式提炼可复用 Skills（SKILL.md）                               │
+│          ├─ 网络健康：为孤立条目补链（基于 network-health.md）                    │
+│          ├─ 报告 rules 候选（无条件行为 → 固化通道）                              │
+│          └─ 报告死链与空文件                                                      │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -92,8 +94,8 @@
 | 角色 | 触发 | 读取 | 写入 | 明确不做 |
 |:-----|:------|:-----|:-----|:---------|
 | **主 LLM** | 每轮 | 注入的上下文 | `notebook.md`（独家） | 写长期记忆 |
-| **固化子代理**（`memory-extractor`） | 每 5 轮 + 会话结束补跑（余数 ≥ 3） | `consolidation-input.md`（增量窗口） | 长期记忆（`remember`） | 写 notebook、清理记忆文件、读全量历史 |
-| **海马体**（`memory-cleaner`） | **仅手动** `/memory-clean` | 记忆文件（`memories/`、`personal/`） | 整理后的记忆文件 + 报告 | 读对话、写 notebook、碰 `turns/` |
+| **固化子代理**（`memory-extractor`） | 每 5 轮 + 会话结束补跑（余数 ≥ 3） | `consolidation-input.md`（增量窗口） | 长期记忆（`remember`）——**先对账**（recall → 更新/supersede/新增） | 写 notebook、清理记忆文件、读全量历史 |
+| **海马体**（`memory-cleaner`） | **仅手动** `/memory-clean` | 记忆文件（`memories/`、`personal/`）+ `maintenance/network-health.md` | 整理后的记忆文件 + Skills + 报告 | 读对话、写 notebook、碰 `turns/` |
 | **扩展** | 每轮 | 消息 | `raw-<n>.md`、`dialogue-summary.md`、`_index.md` | — |
 
 > `notebook.md` 是主 LLM 的**独家白板**。两个子代理都只读不写——异步并发写会互相覆盖。
@@ -123,9 +125,10 @@
 ├── projects/<name>/
 │   ├── notebook.md                 # 任务状态 — 仅主 LLM（跨会话共享）
 │   ├── memories/                   # 长期记忆（项目级）
-│   │   ├── _index.md               # 自动刷新的记忆目录
+│   │   ├── _index.md               # 自动刷新的条目级认知地图索引
 │   │   ├── facts.md / preferences.md
 │   │   └── decisions/ events/     # 分类主题文件
+│   ├── skills/                     # 程序性记忆（SKILL.md，项目级）
 │   └── turns/
 │       └── sessions/<会话ID>/      # 每会话独立的短期记忆（隔离！）
 │           ├── raw-<n>.md          # 每轮完整对话备份
@@ -133,8 +136,10 @@
 │           ├── consolidation-input.md   # 固化子代理的增量窗口
 │           └── consolidation-<ts>.log   # 固化子代理输出日志
 ├── personal/                       # 全局（跨项目）长期记忆
+│   └── skills/                     # 全局程序性记忆
 └── maintenance/
     ├── clean-<ts>.log              # 海马体清理报告
+    ├── network-health.md           # 链接图统计（孤立条目 / 枢纽）
     └── index.md                    # 可点击的日志索引
 ```
 
@@ -164,10 +169,17 @@
 | `🗑️ forget` | ⚠️ 永久删除。优先用 supersede。 |
 | `📓 notebook` | 查看/更新会话小本本 |
 | `📊 memory_status` | 记忆文件状态总览 |
-| `📄 convert_file` | 通过 MarkItDown (WSL) 把 PDF/DOCX 等转成 Markdown |
+| `📄 convert_file` | 通过 MarkItDown 把 PDF/DOCX 等转成 Markdown（Windows 需 WSL） |
+| `✅ confirm` | 风险决策的交互式 y/n 确认 |
 | `🔄 set_project` | 纠正项目名检测 |
 | `/subagent-model` | 选择固化/海马体子代理的模型 |
 | `/memory-clean` | **手动运行海马体**——去重、修复、supersede 记忆文件（前台输出报告） |
+
+## 多平台与隐私
+
+- **平台**：Windows / Linux / macOS。核心机制（spawn flags、路径、init 脚本）跨平台；Windows 的 `convert_file` 需要 [WSL](https://learn.microsoft.com/windows/wsl/install)（MarkItDown 在 WSL 内运行）
+- **Node.js**：建议用包管理器安装（Windows 用 scoop，Linux/macOS 用 nvm），子代理才能可靠定位 `cli.js`
+- **隐私**：模板是**通用的**——初始化后在 `core-prompt.md` 里替换身份占位符（`<你的助手名>` / `<你的用户>`）。你的本地记忆数据（`~/.pi/agent/memory/`）永不提交：`.pi/`、`.reasonix/`、`.specify/` 已被 gitignore。若 fork 本项目，请把个人内容放在本地分支——见 `CLAUDE.md`
 
 ## 快速开始
 
@@ -192,10 +204,20 @@ cd pi-memory-system
 1. 创建 `~/.pi/agent/memory/projects/<name>/` 目录结构
 2. 复制模板（`core-prompt.md`、`rules.md`、`notebook.md`、记忆条目）
 3. 安装扩展到 `~/.pi/agent/extensions/`
-4. 安装所需 Pi 包（`pi-subagents`、`context-mode`、`pi-mcp-adapter`）
+4. 安装所需 Pi 包（`@ollama/pi-web-search`、`context-mode`、`my-pi-themes@1.0.0`、`pi-mcp-adapter`、`pi-subagents`）
 5. 重启 Pi 或运行 `/reload`
 
 > **提示**：如果 `pi update` 因 `my-pi-themes@latest` 失败（上游包已 unpublish），在 `settings.json` 里固定版本 `"npm:my-pi-themes@1.0.0"`。
+
+## 记忆演化（认知设计）
+
+长期记忆不是文件堆，而是**不断生长的知识网络**：
+
+- **认知地图索引** — `_index.md` 是条目级（标题 + 置信度 + tags），按语义分类分组；注入后主 LLM 知道*存在哪些知识*，而不只是哪些文件
+- **联想优先于搜索** — 条目用 `Related: [[...]]` 互链；`recall` 返回邻居链接，主 LLM 顺着网络扩散，而不是在关键词里瞎搜
+- **先对账再固化** — 固化子代理写入前*对账*：recall → 更新已有 / supersede 过期 / 确实没有才新增。认知在演化，信息不堆积
+- **三机制一边界** — 事实/偏好 → `memories`；可复用方法 → `skills`（程序性）；无条件行为 → `rules.md`。海马体负责 `memories → skills` 晋升、报告 `rules` 候选
+- **网络健康** — `/memory-clean` 计算链接图统计（孤立条目、枢纽），海马体为孤立条目补链——让每条记忆都能被联想触达
 
 ## 设计原则
 
@@ -252,7 +274,7 @@ pi-memory-system/
 
 <div align="center">
 
-**Made with 🐱 by [Jason & Daisen]**
+**Made with 🐱**
 
 *大脑是用来思考的，不是用来记忆的。*
 

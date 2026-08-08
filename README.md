@@ -81,11 +81,13 @@
 
 ┌────────────────────────────── HIPPOCAMPUS (manual) ───────────────────────────┐
 │  You type /memory-clean in Pi                                                    │
-│    └─► cleaner subagent (foreground, visible report)                             │
+│    └─► cleaner subagent (background, report → maintenance/clean-<ts>.log)        │
 │          ├─ fix format pollution (double headers, missing metadata)              │
-│          ├─ merge duplicate entries                                              │
-│          ├─ supersede stale / contradictory entries                              │
-│          └─ report dead links & empty files → maintenance/clean-<ts>.log         │
+│          ├─ merge duplicates / supersede stale & contradictory entries           │
+│          ├─ extract reusable Skills (SKILL.md) from repeated patterns            │
+│          ├─ network health: link isolated entries (from network-health.md)       │
+│          ├─ report rules candidates (unconditional behaviors → rules channel)    │
+│          └─ report dead links & empty files                                      │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -94,8 +96,8 @@
 | Role | Trigger | Reads | Writes | Never |
 |:-----|:--------|:------|:-------|:------|
 | **Main LLM** | every turn | injected context | `notebook.md` (exclusive) | writes long-term memory |
-| **Consolidation subagent** (`memory-extractor`) | every 5th round + session-end catch-up (leftover ≥ 3) | `consolidation-input.md` (incremental window) | long-term memory via `remember` | writes notebook, cleans memory files, reads full history |
-| **Hippocampus** (`memory-cleaner`) | **manual only** — `/memory-clean` | memory files (`memories/`, `personal/`) | cleaned memory files + report | reads conversation, writes notebook, touches `turns/` |
+| **Consolidation subagent** (`memory-extractor`) | every 5th round + session-end catch-up (leftover ≥ 3) | `consolidation-input.md` (incremental window) | long-term memory via `remember` — **reconciliation first** (recall → update/supersede/new) | writes notebook, cleans memory files, reads full history |
+| **Hippocampus** (`memory-cleaner`) | **manual only** — `/memory-clean` | memory files (`memories/`, `personal/`) + `maintenance/network-health.md` | cleaned memory files + Skills + report | reads conversation, writes notebook, touches `turns/` |
 | **Extension** | every turn | messages | `raw-<n>.md`, `dialogue-summary.md`, `_index.md` | — |
 
 > `notebook.md` is the main LLM's exclusive whiteboard. Both subagents treat it as **read-only** — async concurrent writes would clobber each other.
@@ -125,9 +127,10 @@ Automation was rejected on purpose: if you close many short sessions, auto-trigg
 ├── projects/<name>/
 │   ├── notebook.md                 # task state — MAIN LLM ONLY (shared across sessions)
 │   ├── memories/                   # long-term memory (project scope)
-│   │   ├── _index.md               # auto-refreshed directory
+│   │   ├── _index.md               # auto-refreshed cognitive-map index (entry-level)
 │   │   ├── facts.md / preferences.md
 │   │   └── decisions/ events/     # categorized topic files
+│   ├── skills/                     # procedural memory (SKILL.md, project scope)
 │   └── turns/
 │       └── sessions/<session-id>/  # per-session short-term memory (isolated!)
 │           ├── raw-<n>.md          # per-round full-conversation backup
@@ -135,12 +138,24 @@ Automation was rejected on purpose: if you close many short sessions, auto-trigg
 │           ├── consolidation-input.md   # incremental window for the subagent
 │           └── consolidation-<ts>.log   # subagent output log
 ├── personal/                       # global (cross-project) long-term memory
+│   └── skills/                     # global procedural memory
 └── maintenance/
     ├── clean-<ts>.log              # hippocampus reports
+    ├── network-health.md           # link-graph stats (isolated entries / hubs)
     └── index.md                    # clickable log index
 ```
 
 Why per-session directories? **Parallel Pi sessions never clobber each other's short-term memory.** Long-term memory and `notebook.md` stay shared at project level.
+
+## Memory Evolution (cognitive design)
+
+Long-term memory isn't just a pile of files — it's a **knowledge network that grows**:
+
+- **Cognitive-map index** — `_index.md` is entry-level (titles + confidence + tags), grouped by semantic category, injected so the main LLM knows *what knowledge exists*, not just which files.
+- **Association over search** — entries link via `Related: [[...]]`; `recall` returns neighbor links, so the LLM spreads through the network instead of keyword-matching in the dark.
+- **Reconciliation-first consolidation** — the extractor *reconciles* before writing: recall → update existing / supersede outdated / only create new when nothing exists. Cognition evolves, info doesn't pile up.
+- **Three mechanisms, one boundary** — facts/preferences → `memories`; repeatable methods → `skills` (procedural); unconditional behaviors → `rules.md`. The hippocampus promotes `memories → skills`, reports `rules` candidates.
+- **Network health** — `/memory-clean` computes link-graph stats (isolated entries, hubs); the hippocampus links isolated entries so nothing is unreachable by association.
 
 ## Memory Entry Format
 
@@ -166,10 +181,17 @@ Categories: `fact` / `preference` / `decision` / `event`, stored in `facts/`, `p
 | `🗑️ forget` | ⚠️ Permanent delete. Prefer supersede. |
 | `📓 notebook` | View/update the session notebook |
 | `📊 memory_status` | Memory file status overview |
-| `📄 convert_file` | Convert binary files (PDF, DOCX…) to Markdown via MarkItDown (WSL) |
+| `📄 convert_file` | Convert binary files (PDF, DOCX…) to Markdown via MarkItDown (Windows: needs WSL) |
+| `✅ confirm` | Interactive y/n prompt for risky decisions |
 | `🔄 set_project` | Correct project name detection |
 | `/subagent-model` | Pick the model used by the consolidation/hippocampus subagents |
 | `/memory-clean` | **Manually run the hippocampus** — dedupe, fix, supersede memory files (foreground report) |
+
+## Cross-platform & Privacy
+
+- **Platforms**: Windows / Linux / macOS. Core mechanism (spawn flags, paths, init scripts) is cross-platform; `convert_file` on Windows requires [WSL](https://learn.microsoft.com/windows/wsl/install) (MarkItDown runs inside WSL).
+- **Node.js**: recommended via a package manager (e.g. scoop on Windows, nvm on Linux/macOS) so the subagent locates `cli.js` reliably.
+- **Privacy**: templates are **generic** — replace the identity placeholders (`<你的助手名>` / `<你的用户>`) in `core-prompt.md` after init. Your local memory data (`~/.pi/agent/memory/`) is never committed: `.pi/`, `.reasonix/`, `.specify/` are git-ignored. If you fork this repo, keep personal content in a local branch — see `CLAUDE.md`.
 
 ## Quick Start
 
@@ -194,7 +216,7 @@ The init script:
 1. Creates `~/.pi/agent/memory/projects/<name>/` structure
 2. Copies templates (`core-prompt.md`, `rules.md`, `notebook.md`, memory entries)
 3. Installs the extension to `~/.pi/agent/extensions/`
-4. Installs required Pi packages (`pi-subagents`, `context-mode`, `pi-mcp-adapter`)
+4. Installs required Pi packages (`@ollama/pi-web-search`, `context-mode`, `my-pi-themes@1.0.0`, `pi-mcp-adapter`, `pi-subagents`)
 5. Restart Pi or run `/reload`
 
 > **Tip**: if `pi update` fails on `my-pi-themes@latest` (the package was unpublished upstream), pin it in `settings.json` as `"npm:my-pi-themes@1.0.0"`.
@@ -254,7 +276,7 @@ pi-memory-system/
 
 <div align="center">
 
-**Made with 🐱 by [Jason & Daisen]**
+**Made with 🐱**
 
 *Brains are for thinking, not for remembering.*
 
