@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { HOME, PATHS, getProjectName } from "./config";
-import { safeRead, walkMarkdownFiles, parseMemoryEntries } from "./utils";
+import { safeRead, walkMarkdownFiles, parseMemoryEntries, extractLinks, extractRelatedLinks } from "./utils";
 
 /**
  * Refresh _index.md by scanning all .md files in the memory directory.
@@ -334,6 +334,90 @@ export function runMemoryMaintenance(cwd: string): void {
       "utf-8",
     );
   } catch { /* spawn failure — non-fatal */ }
+}
+
+/**
+ * Build a network-health report for memory: isolated entries, link density,
+ * hub nodes. Mechanical graph stats are computed in code (LLM unreliable at
+ * counting links); the hippocampus (cleaner) then uses the report to link
+ * isolated entries or report them. Written to maintenance/network-health.md.
+ */
+export function buildNetworkHealthReport(cwd: string): string {
+  const scopes: [string, string][] = [
+    ["项目记忆", PATHS.memoriesDir(cwd)],
+    ["全局记忆", PATHS.personalDir],
+  ];
+
+  interface EntryNode {
+    scope: string;
+    file: string;
+    section: string;
+    outLinks: string[];
+    inCount: number;
+  }
+
+  const nodes: EntryNode[] = [];
+  const fileLinks: { file: string; target: string }[] = [];
+
+  for (const [scopeLabel, dir] of scopes) {
+    if (!fs.existsSync(dir)) continue;
+    for (const f of walkMarkdownFiles(dir)) {
+      const rel = path.relative(dir, f).replace(/\\/g, "/");
+      const content = safeRead(f);
+      if (!content) continue;
+
+      const sections = content.split(/(?=^## )/m);
+      for (const sec of sections) {
+        const titleMatch = sec.match(/^## (.+)/m);
+        if (!titleMatch) continue;
+        const title = titleMatch[1].trim();
+        if (/↗\s*\*\*Superseded|↗\s*\*\*被取代/i.test(sec)) continue; // 跳过 superseded
+
+        const outLinks = [...extractRelatedLinks(sec), ...extractLinks(sec)]
+          .map((l) => l.split("#")[0].trim())
+          .filter((l) => l && !l.includes("_index"));
+        nodes.push({ scope: scopeLabel, file: rel, section: title, outLinks: [...new Set(outLinks)], inCount: 0 });
+        for (const t of outLinks) fileLinks.push({ file: rel, target: t });
+      }
+    }
+  }
+
+  // 入链:指向本条目所在文件的**不同来源文件数**(去重,避免同文件多链接重复计数)
+  for (const n of nodes) {
+    const f = n.file.replace(/^memories\//, "").replace(/\.md$/, "");
+    const sources = new Set<string>();
+    for (const fl of fileLinks) {
+      if (fl.file === n.file) continue; // 不自链
+      const t = fl.target.replace(/^memories\//, "").replace(/\.md$/, "");
+      if (t === f) sources.add(fl.file);
+    }
+    n.inCount = sources.size;
+  }
+
+  const totalEntries = nodes.length;
+  const totalLinks = fileLinks.length;
+  const density = totalEntries > 0 ? (totalLinks / totalEntries).toFixed(2) : "0";
+  const isolated = nodes.filter((n) => n.outLinks.length === 0 && n.inCount === 0);
+  const hubs = [...nodes].sort((a, b) => b.inCount - a.inCount).slice(0, 5).filter((n) => n.inCount > 0);
+
+  const lines: string[] = [
+    `## 记忆网络健康报告 (${new Date().toISOString().slice(0, 10)})`,
+    ``,
+    `- 条目总数: ${totalEntries} | 链接总数: ${totalLinks} | 密度: ${density}`,
+    `- 孤立条目(零出链且零入链,不会被联想触达): ${isolated.length} 个`,
+  ];
+  for (const n of isolated.slice(0, 30)) {
+    lines.push(`  - [[${n.file}#${n.section}|${n.scope}]]`);
+  }
+  if (isolated.length > 30) lines.push(`  …(共 ${isolated.length} 个)`);
+
+  if (hubs.length > 0) {
+    lines.push(`- 枢纽节点(被链接最多):`);
+    for (const h of hubs) {
+      lines.push(`  - [[${h.file}#${h.section}]] × ${h.inCount}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 export function getSubagentModel(): string {
