@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { HOME } from "./config";
-import { getSubagentModel, updateSubagentModelStatus } from "./memory-ops";
+import { getSubagentModel, updateSubagentModelStatus, buildNetworkHealthReport } from "./memory-ops";
 
 export function registerCommands(pi: ExtensionAPI): void {
   const SUBAGENT_MODEL_FILE = path.join(HOME, ".pi", "agent", "memory", "subagent-model.txt");
@@ -79,14 +79,24 @@ export function registerCommands(pi: ExtensionAPI): void {
       }
       args.push("--append-system-prompt", CLEANER_PROMPT);
 
-      const prompt =
-        "记忆维护（海马体整理）。扫描当前项目的长期记忆（memories/）与全局记忆（personal/）并执行清理：" +
-        "修复格式污染、合并重复条目、supersede 过期/矛盾条目、报告死链与空文件。" +
-        "不碰 notebook.md（主 LLM 独家维护），不碰 turns/ 短期记忆。最后输出清理报告。";
-
       // 后台运行：输出重定向到 maintenance 日志，不阻塞终端，状态栏显示进度
       const maintenanceDir = path.join(HOME, ".pi", "agent", "memory", "maintenance");
       fs.mkdirSync(maintenanceDir, { recursive: true });
+
+      // 生成记忆网络健康报告(孤立条目/枢纽),供海马体补链/修复
+      let networkHealthPath = "";
+      try {
+        networkHealthPath = path.join(maintenanceDir, "network-health.md");
+        fs.writeFileSync(networkHealthPath, buildNetworkHealthReport(cwd), "utf-8");
+      } catch { /* best effort */ }
+
+      const prompt =
+        "记忆维护（海马体整理）。扫描当前项目的长期记忆（memories/）与全局记忆（personal/）并执行清理：" +
+        "修复格式污染、合并重复条目、supersede 过期/矛盾条目、报告死链与空文件。" +
+        (networkHealthPath
+          ? `先 read ${networkHealthPath} 了解记忆网络健康（孤立条目/枢纽节点），据此为孤立条目补 Related 链接（明确相关才补）或报告。`
+          : "") +
+        "不碰 notebook.md（主 LLM 独家维护），不碰 turns/ 短期记忆。最后输出清理报告。";
       const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
       const logPath = path.join(maintenanceDir, `clean-${ts}.log`);
       const logFd = fs.openSync(logPath, "a");
