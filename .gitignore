@@ -15,3 +15,7 @@ yarn-error.log*
 
 # Pi (user-specific, not project-template)
 .pi/agent/
+
+# Reasonix (auto-research tool artifacts, user-specific)
+.reasonix/
+.specify/
